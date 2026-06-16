@@ -128,7 +128,7 @@ def _fetch_prior_day_context(api_client=None) -> PriorDayContext:
     classifies SKIP and the agent waits rather than crashing.
     """
     from webull.data.data_client import DataClient
-    from webull.api.enum import Category
+    from webull.data.common.category import Category
 
     if api_client is None:
         api_client = config.build_api_client()

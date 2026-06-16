@@ -202,7 +202,7 @@ class WebullFeed:
     def _poll_loop(self) -> None:
         """Background thread: poll get_futures_snapshot() every N seconds."""
         from webull.data.data_client import DataClient
-        from webull.api.enum import Category
+        from webull.data.common.category import Category
 
         data_client = DataClient(self._api_client)
 

@@ -286,7 +286,7 @@ class SpreadPricer:
 
     def _fetch_quote_sync(self, occ_symbol: str):
         """Synchronous SDK call — executed in thread executor."""
-        from webull.api.enum import Category
+        from webull.data.common.category import Category
 
         data_client = self._get_data_client()
         LOGGER.debug("Fetching option quote: %s", occ_symbol)
