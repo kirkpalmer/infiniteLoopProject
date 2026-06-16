@@ -304,3 +304,39 @@ class SpreadPricer:
         # Fallback: try dict-style body
         if isinstance(resp, dict):
             data = resp.get("data") or resp
+            items = data if isinstance(data, list) else [data]
+            if items:
+                return items[0]
+
+        LOGGER.warning("Empty or unexpected snapshot response for %s: %r", occ_symbol, resp)
+        return {}
+
+    @staticmethod
+    def _today_expiry_occ() -> str:
+        """Return today's date in YYMMDD format for OCC symbols."""
+        return datetime.now(EASTERN).strftime("%y%m%d")
+
+    @staticmethod
+    def _invalid_spread(
+        legs: SpreadLegs,
+        reason: str,
+        short_leg: Optional[LegQuote] = None,
+        long_leg:  Optional[LegQuote] = None,
+    ) -> SpreadQuote:
+        opt_type = "P" if "put" in legs.spread_type else "C"
+        _empty = LegQuote(
+            strike=0, option_type=opt_type,
+            bid=0, ask=0, mid=0, last=0, volume=0, open_interest=0,
+            quoted_at=datetime.now(EASTERN),
+        )
+        return SpreadQuote(
+            spread_type=legs.spread_type,
+            short_leg=short_leg or _empty,
+            long_leg=long_leg  or _empty,
+            net_credit=0.0,
+            max_loss_points=legs.spread_width,
+            max_profit_points=0.0,
+            spread_width=legs.spread_width,
+            is_valid=False,
+            invalid_reason=reason,
+        )

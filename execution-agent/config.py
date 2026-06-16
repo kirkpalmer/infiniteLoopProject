@@ -75,4 +75,51 @@ WEBULL_STREAM_HOST = (
 )
 
 
-def build
+def build_api_client():
+    """
+    Build and return an authenticated Webull ApiClient.
+    The SDK handles token exchange, refresh, and request signing automatically.
+    Call this once at startup and share the instance.
+    """
+    from webull.core.client import ApiClient
+    client = ApiClient(WEBULL_APP_KEY, WEBULL_APP_SECRET, WEBULL_REGION_ID)
+    client.add_endpoint(WEBULL_REGION_ID, WEBULL_API_HOST)
+    return client
+
+
+def validate() -> None:
+    """
+    Raise ValueError if any required credential is missing.
+    Call once at startup before anything else runs.
+    """
+    missing = []
+    for name, value in [
+        ("WEBULL_APP_KEY",    WEBULL_APP_KEY),
+        ("WEBULL_APP_SECRET", WEBULL_APP_SECRET),
+        ("WEBULL_ACCOUNT_ID", WEBULL_ACCOUNT_ID),
+        ("DATABASE_URL",      DATABASE_URL),
+    ]:
+        if not value:
+            missing.append(name)
+
+    if missing:
+        raise ValueError(
+            f"Missing required environment variables: {', '.join(missing)}. "
+            "Set them in execution-agent/.env or Railway environment."
+        )
+
+    if WEBULL_ENVIRONMENT not in ("uat", "prod"):
+        raise ValueError(
+            f"WEBULL_ENVIRONMENT must be 'uat' or 'prod', got '{WEBULL_ENVIRONMENT}'"
+        )
+
+    if WEBULL_ENVIRONMENT == "prod":
+        LOGGER.critical(
+            "PRODUCTION ENVIRONMENT — all orders are REAL. "
+            "Ensure Phase 3 sign-off is complete before proceeding."
+        )
+    else:
+        LOGGER.info(
+            "Environment: UAT/sandbox (paper trading). "
+            "Set WEBULL_ENVIRONMENT=prod for live trading (Phase 3 only)."
+        )

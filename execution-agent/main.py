@@ -45,7 +45,7 @@ from constants import (
 from data.feed import WebullFeed
 from data.normalizer import Bar
 from health.watchdog import Watchdog
-from logging.trade_logger import TradeLogger
+from trade_logging.trade_logger import TradeLogger
 from orders.manager import OrderManager, OrderResult, OrderStatus
 from orders.state import OpenPosition, PositionState
 from risk.limits import daily_halt_triggered
@@ -535,4 +535,4 @@ async def _shutdown(
 
 
 if __name__ == "__main__":
-    asyncio
+    asyncio.run(main())
