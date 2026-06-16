@@ -116,6 +116,17 @@ class StrategyRegistry:
                 ON oracle_iterations (param_changed, overall_accuracy)
             """)
 
+            # -- Webull token persistence (one row, upserted on each successful auth) --
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS webull_tokens (
+                    id         INTEGER PRIMARY KEY DEFAULT 1,
+                    token      TEXT NOT NULL,
+                    expires    BIGINT NOT NULL,
+                    status     TEXT NOT NULL DEFAULT 'NORMAL',
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            """)
+
             # -- Detect stale schema: old schema has 'params', new has 'oracle_params' --
             cur.execute("""
                 SELECT column_name FROM information_schema.columns

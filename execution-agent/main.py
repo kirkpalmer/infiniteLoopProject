@@ -80,6 +80,80 @@ def _setup_logging() -> None:
     logging.basicConfig(level=level, handlers=[handler], force=True)
 
 
+# ── Webull token persistence (survives Railway container restarts) ─────────────
+
+def _token_file_path():
+    """Return the path the Webull SDK uses for its token file."""
+    from webull.core.http.initializer.token.token_storage import TokenStorage
+    return TokenStorage().get_token_file_path()
+
+
+def _load_token_from_db() -> bool:
+    """
+    On startup, load a previously verified Webull token from PostgreSQL and
+    write it to the SDK token file. Returns True if a valid token was found.
+
+    This means container restarts (crash, redeploy) skip the SMS 2FA flow
+    as long as the token hasn't expired and the SDK can refresh it.
+    """
+    import time
+    import psycopg2
+    try:
+        conn = psycopg2.connect(config.DATABASE_URL, connect_timeout=10)
+        cur = conn.cursor()
+        cur.execute("SELECT token, expires, status FROM webull_tokens WHERE id = 1")
+        row = cur.fetchone()
+        conn.close()
+        if not row:
+            LOGGER.info("No persisted Webull token in DB — will go through 2FA flow")
+            return False
+        token, expires, status = row
+        now_ms = int(time.time() * 1000)
+        if expires < now_ms:
+            LOGGER.warning("Persisted Webull token expired (expires=%s) — will go through 2FA flow", expires)
+            return False
+        path = _token_file_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"{token}\n{expires}\n{status}\n", encoding="utf-8")
+        LOGGER.info("Loaded Webull token from DB (expires=%s) — skipping 2FA", expires)
+        return True
+    except Exception as exc:
+        LOGGER.warning("Could not load Webull token from DB: %s", exc)
+        return False
+
+
+def _save_token_to_db() -> None:
+    """
+    After successful Webull auth, save the verified token from the SDK token
+    file to PostgreSQL so it survives container restarts.
+    """
+    import psycopg2
+    try:
+        path = _token_file_path()
+        if not path.exists():
+            return
+        lines = path.read_text(encoding="utf-8").strip().splitlines()
+        if len(lines) < 3 or lines[2].strip() != "NORMAL":
+            return
+        token, expires = lines[0].strip(), lines[1].strip()
+        conn = psycopg2.connect(config.DATABASE_URL, connect_timeout=10)
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO webull_tokens (id, token, expires, status, updated_at)
+            VALUES (1, %s, %s, 'NORMAL', NOW())
+            ON CONFLICT (id) DO UPDATE
+            SET token = EXCLUDED.token,
+                expires = EXCLUDED.expires,
+                status = EXCLUDED.status,
+                updated_at = NOW()
+        """, (token, int(expires)))
+        conn.commit()
+        conn.close()
+        LOGGER.info("Saved Webull token to DB (expires=%s) — future restarts will skip 2FA", expires)
+    except Exception as exc:
+        LOGGER.warning("Could not save Webull token to DB: %s", exc)
+
+
 # ── Prior-day context (Webull DataClient) ─────────────────────────────────────
 
 # Fallback prior-day context when Webull data is unavailable.
@@ -526,8 +600,15 @@ async def main() -> None:
         LOGGER.critical("No active strategy in database — cannot start. Run Strategy Lab first.")
         sys.exit(1)
 
+    # Load persisted Webull token so container restarts skip the SMS 2FA flow
+    _load_token_from_db()
+
     # Build a single SDK client shared by all components
+    # (token_check_duration_seconds=600 gives 10 min to approve 2FA on first run)
     api_client = config.build_api_client()
+
+    # Save the verified token back to DB so future restarts skip 2FA
+    _save_token_to_db()
 
     # Shared components
     pos_state    = PositionState()

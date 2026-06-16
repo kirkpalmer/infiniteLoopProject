@@ -76,9 +76,15 @@ def build_api_client():
     Call this once at startup and share the instance across all components.
     """
     from webull.core.client import ApiClient
-    # No add_endpoint() call needed — the SDK's built-in endpoints.json already
-    # has api.webull.com for the "us" region, which is what we want.
-    client = ApiClient(WEBULL_APP_KEY, WEBULL_APP_SECRET, WEBULL_REGION_ID)
+    # token_check_duration_seconds=600 gives 10 minutes to approve the 2FA SMS
+    # on first run. After approval the token is saved to PostgreSQL and future
+    # restarts load it from DB, skipping 2FA entirely.
+    client = ApiClient(
+        WEBULL_APP_KEY,
+        WEBULL_APP_SECRET,
+        WEBULL_REGION_ID,
+        token_check_duration_seconds=600,
+    )
     return client
 
 
