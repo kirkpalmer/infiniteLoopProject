@@ -133,7 +133,23 @@ def _fetch_prior_day_context(api_client=None) -> PriorDayContext:
     if api_client is None:
         api_client = config.build_api_client()
 
-    client = DataClient(api_client)
+    try:
+        client = DataClient(api_client)
+    except Exception as exc:
+        LOGGER.warning(
+            "DataClient init failed (%s) — Webull credentials may be missing or "
+            "the UAT environment is unreachable. Using fallback prior-day context; "
+            "Oracle will classify SKIP until data is available.",
+            exc,
+        )
+        return PriorDayContext(
+            prior_close=_FALLBACK_PRIOR_CTX["prior_close"],
+            prior_vwap=_FALLBACK_PRIOR_CTX["prior_close"],
+            prior_prior_close=_FALLBACK_PRIOR_CTX["prior_prior_close"],
+            current_vix=_FALLBACK_PRIOR_CTX["current_vix"],
+            date=datetime.now(EASTERN).strftime("%Y-%m-%d"),
+        )
+
     LOGGER.info("Fetching prior-day context from Webull DataClient...")
 
     # ── ES daily bars (prior_close, prior_prior_close) ─────────────────────
@@ -164,7 +180,6 @@ def _fetch_prior_day_context(api_client=None) -> PriorDayContext:
         items = body if isinstance(body, list) else ([body] if body else [])
         if items:
             item = items[0]
-            # Use last close; fall back to prev_close if close is 0
             vx_close = float(getattr(item, "close", None) or getattr(item, "prev_close", None) or 0)
             if vx_close > 0:
                 current_vix = vx_close
