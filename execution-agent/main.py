@@ -80,45 +80,122 @@ def _setup_logging() -> None:
     logging.basicConfig(level=level, handlers=[handler], force=True)
 
 
-# ── Prior-day context from yfinance ───────────────────────────────────────────
+# ── Prior-day context (Webull DataClient) ─────────────────────────────────────
 
-def _fetch_prior_day_context() -> PriorDayContext:
+# Fallback prior-day context when Webull data is unavailable.
+# Oracle classifies NEUTRAL on flat/missing features → agent skips trading
+# rather than guessing direction. Safe failure mode.
+_FALLBACK_PRIOR_CTX = dict(prior_close=5300.0, prior_prior_close=5300.0, current_vix=20.0)
+
+
+def _parse_bar_closes(resp) -> list[float]:
     """
-    Fetch prior-day SPX OHLCV and VIX from yfinance at startup.
-    Returns a PriorDayContext with the last two days of data.
+    Extract close prices from a Webull DataClient history-bars response.
+    The SDK returns a response object whose .body is a list of bar objects,
+    each having a .close attribute (or dict key).
     """
-    import yfinance as yf
-    import math
+    closes: list[float] = []
+    body = getattr(resp, "body", None) if resp else None
+    if body is None and isinstance(resp, dict):
+        body = resp.get("data") or resp
+    if not body:
+        return closes
+    items = body if isinstance(body, list) else [body]
+    for item in items:
+        try:
+            val = (
+                float(item.close)
+                if hasattr(item, "close")
+                else float(item.get("close") or item.get("c") or 0)
+            )
+            if val > 0:
+                closes.append(val)
+        except Exception:
+            continue
+    return closes
 
-    LOGGER.info("Fetching prior-day SPX and VIX data from yfinance...")
-    spx = yf.download("^GSPC", period="5d", interval="1d", progress=False, auto_adjust=True)
-    vix = yf.download("^VIX",  period="5d", interval="1d", progress=False, auto_adjust=True)
 
-    if len(spx) < 2:
-        raise RuntimeError(f"Insufficient SPX history (got {len(spx)} rows)")
-    if len(vix) < 1:
-        raise RuntimeError("Could not fetch VIX data")
+def _fetch_prior_day_context(api_client=None) -> PriorDayContext:
+    """
+    Fetch prior-day ES close (proxy for SPX) and VX close (proxy for VIX)
+    from the Webull DataClient using the SDK already authenticated at startup.
 
-    # prior_close = yesterday's close; prior_prior_close = day before that
-    spx_closes = spx["Close"].dropna().values
-    prior_close       = float(spx_closes[-1])
-    prior_prior_close = float(spx_closes[-2]) if len(spx_closes) >= 2 else prior_close
+    Uses:
+      - ES daily history bars  → prior_close, prior_prior_close
+      - VX (VIX futures) snapshot prev_close → current_vix
 
-    # Approximate prior VWAP as prior close (we don't have intraday data at startup)
-    # The classifier degrades gracefully when prev_close_vs_vwap ≈ 0
-    prior_vwap = prior_close
+    If Webull data is unavailable, falls back to neutral defaults so Oracle
+    classifies SKIP and the agent waits rather than crashing.
+    """
+    from webull.data.data_client import DataClient
+    from webull.api.enum import Category
 
-    current_vix = float(vix["Close"].dropna().values[-1])
+    if api_client is None:
+        api_client = config.build_api_client()
+
+    client = DataClient(api_client)
+    LOGGER.info("Fetching prior-day context from Webull DataClient...")
+
+    # ── ES daily bars (prior_close, prior_prior_close) ─────────────────────
+    es_closes: list[float] = []
+    try:
+        resp = client.futures_market_data.get_futures_history_bars(
+            symbols=["ESc1"],
+            category=Category.US_FUTURES,
+            timespan="d1",
+            count="5",
+        )
+        es_closes = _parse_bar_closes(resp)
+        if es_closes:
+            LOGGER.info("ES daily bars: %d bars, last close=%.2f", len(es_closes), es_closes[-1])
+        else:
+            LOGGER.warning("Webull ES history bars returned no data")
+    except Exception as exc:
+        LOGGER.warning("ES history bars fetch failed: %s", exc)
+
+    # ── VX snapshot for VIX proxy ──────────────────────────────────────────
+    current_vix: float = _FALLBACK_PRIOR_CTX["current_vix"]
+    try:
+        resp_vx = client.futures_market_data.get_futures_snapshot(
+            symbols=["VXc1"],
+            category=Category.US_FUTURES,
+        )
+        body = getattr(resp_vx, "body", None)
+        items = body if isinstance(body, list) else ([body] if body else [])
+        if items:
+            item = items[0]
+            # Use last close; fall back to prev_close if close is 0
+            vx_close = float(getattr(item, "close", None) or getattr(item, "prev_close", None) or 0)
+            if vx_close > 0:
+                current_vix = vx_close
+                LOGGER.info("VX snapshot close=%.2f (used as VIX proxy)", current_vix)
+        if current_vix == _FALLBACK_PRIOR_CTX["current_vix"]:
+            LOGGER.warning("VX snapshot unusable — using default VIX=%.1f", current_vix)
+    except Exception as exc:
+        LOGGER.warning("VX snapshot fetch failed: %s — using default VIX=%.1f", exc, current_vix)
+
+    # ── Build context ──────────────────────────────────────────────────────
+    if len(es_closes) >= 2:
+        prior_close       = es_closes[-1]
+        prior_prior_close = es_closes[-2]
+    elif len(es_closes) == 1:
+        prior_close = prior_prior_close = es_closes[0]
+    else:
+        LOGGER.error(
+            "No ES history data from Webull — using defaults. "
+            "Oracle will classify SKIP until data is available."
+        )
+        prior_close = prior_prior_close = _FALLBACK_PRIOR_CTX["prior_close"]
 
     ctx = PriorDayContext(
         prior_close=prior_close,
-        prior_vwap=prior_vwap,
+        prior_vwap=prior_close,          # no intraday VWAP at startup; close is close enough
         prior_prior_close=prior_prior_close,
         current_vix=current_vix,
         date=datetime.now(EASTERN).strftime("%Y-%m-%d"),
     )
     LOGGER.info(
-        "Prior-day context: prior_close=%.2f prior_prior=%.2f vix=%.1f",
+        "Prior-day context: es_close=%.2f es_prev=%.2f vix=%.1f",
         ctx.prior_close, ctx.prior_prior_close, ctx.current_vix,
     )
     return ctx
@@ -444,7 +521,7 @@ async def main() -> None:
     trade_logger = TradeLogger()
 
     # Fetch prior-day context for Oracle features
-    prior_ctx = _fetch_prior_day_context()
+    prior_ctx = _fetch_prior_day_context(api_client=api_client)
 
     # Account equity
     equity = await _fetch_account_equity(api_client=api_client)
@@ -484,7 +561,7 @@ async def main() -> None:
             # Reset daily state at midnight ET
             if now_et.hour == 0 and now_et.minute < 1:
                 equity = await _fetch_account_equity(api_client=api_client)
-                prior_ctx = _fetch_prior_day_context()
+                prior_ctx = _fetch_prior_day_context(api_client=api_client)
                 pos_state.reset()
                 watchdog.reset_for_new_day(starting_equity=equity)
                 trade_logger.log_equity_snapshot(

@@ -10,10 +10,5 @@ asyncpg==0.29.0            # PostgreSQL (async, if needed in future layers)
 # Environment
 python-dotenv==1.0.1
 
-# Data (prior-day context fetched at startup via yfinance)
-yfinance==0.2.40
-pandas==2.2.2
-numpy==1.26.4
-
 # Timezone
 pytz==2024.1
