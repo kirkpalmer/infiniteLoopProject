@@ -470,7 +470,7 @@ select.rp-input option { background: var(--surface2); }
           <button class="btn btn-ghost" onclick="window.location='/api/oracle/report'" title="Download full status report (markdown): params, IS/OOS, eligibility, walk-forward, daily signals">⬇ Report</button>
           <button class="btn btn-primary" id="oracleSweepBtn" onclick="runOracleSweep()" title="Optuna TPE sweep over all thresholds — hundreds of backtests, no LLM needed">⚡ Run Sweep</button>
           <button class="btn btn-ghost" id="oracleRunBtn" onclick="runOracleLoop()">▶ Hermes Loop</button>
-          <button class="btn btn-success" id="promoteBtn" onclick="promoteStrategy()" title="Promote best Oracle candidate to active — execution agent will start using it">🚀 Promote to Active</button>
+          <button class="btn btn-success" id="promoteBtn" onclick="openPromoteModal()" title="Select and promote an Oracle candidate to active">🚀 Promote…</button>
         </div>
       </div>
 
@@ -1398,49 +1398,138 @@ async function oracleRefresh() {
 }
 
 
+
 // ═══════════════════════════════════════════════════════
-// PROMOTE TO ACTIVE
+// PROMOTE MODAL
 // ═══════════════════════════════════════════════════════
 
-async function promoteStrategy(strategyId) {
-  const btn = document.getElementById('promoteBtn');
-  const orig = btn ? btn.textContent : null;
-  if (btn) { btn.textContent = '🚀 Promoting…'; btn.disabled = true; }
+let _selectedCandidateId = null;
 
+function openPromoteModal() {
+  _selectedCandidateId = null;
+  document.getElementById('confirmPromoteBtn').disabled = true;
+  document.getElementById('promoteModal').style.display = 'flex';
+  loadCandidates();
+}
+
+function closePromoteModal() {
+  document.getElementById('promoteModal').style.display = 'none';
+}
+
+async function loadCandidates() {
+  const body = document.getElementById('promoteModalBody');
+  body.innerHTML = '<div style="color:var(--text-muted);text-align:center;padding:32px">Loading...</div>';
   try {
-    const body = strategyId ? { strategy_id: strategyId } : {};
-    const resp = await fetch(`${API}/api/promote`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
+    const resp = await fetch(`${API}/api/strategies`);
     const data = await resp.json();
-
-    if (!resp.ok || data.status === 'error') {
-      const msg = data.error || `HTTP ${resp.status}`;
-      alert('Promote failed: ' + msg);
-      if (btn) { btn.textContent = '🚀 Error'; btn.style.color = 'var(--down)'; setTimeout(() => { btn.textContent = orig; btn.style.color = ''; btn.disabled = false; }, 2000); }
-      return;
-    }
-
-    const s = data.strategy;
-    const acc = s.overall_accuracy != null ? (s.overall_accuracy * 100).toFixed(1) + '%' : '?';
-    const dp  = s.directional_precision != null ? (s.directional_precision * 100).toFixed(1) + '%' : '?';
-    const msg = `✅ Promoted: "${s.name}"
-Accuracy: ${acc}  Directional precision: ${dp}
-
-The execution agent will load this strategy on next startup.`;
-    alert(msg);
-
-    if (btn) { btn.textContent = '✅ Promoted!'; setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 3000); }
+    renderCandidates(data.strategies || []);
   } catch(e) {
-    console.error('[Promote failed]', e);
-    alert('Promote error: ' + e.message);
-    if (btn) { btn.textContent = '🚀 Error'; setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 2000); }
+    body.innerHTML = `<div style="color:var(--down);padding:16px">Failed to load candidates: ${e.message}</div>`;
   }
 }
 
-// ═══════════════════════════════════════════════════════
+function renderCandidates(candidates) {
+  const body = document.getElementById('promoteModalBody');
+  if (!candidates.length) {
+    body.innerHTML = `
+      <div style="text-align:center;padding:32px;color:var(--text-muted)">
+        <div style="font-size:32px;margin-bottom:12px">&#128237;</div>
+        <div style="font-size:14px;font-weight:600;margin-bottom:6px">No candidates saved yet</div>
+        <div style="font-size:12px">Run a Sweep or Hermes Loop — candidates auto-save on completion.<br>Or click <strong>Save Current Oracle</strong> below to save what is in memory now.</div>
+      </div>`;
+    return;
+  }
+  const rows = candidates.map(c => {
+    const acc  = c.overall_accuracy != null ? (c.overall_accuracy * 100).toFixed(1) + '%' : '—';
+    const dp   = c.directional_precision != null ? (c.directional_precision * 100).toFixed(1) + '%' : '—';
+    const date = c.created_at ? c.created_at.slice(0,16).replace('T',' ') : '—';
+    const dpColor = (c.directional_precision || 0) > 0.55 ? 'var(--up)' : 'var(--text-muted)';
+    const badge = c.status === 'active'
+      ? '<span style="background:#22c55e22;color:#22c55e;padding:2px 7px;border-radius:4px;font-size:10px;font-weight:700">ACTIVE</span>'
+      : c.status === 'retired'
+        ? '<span style="color:var(--text-muted);font-size:10px">retired</span>'
+        : '<span style="color:var(--text-muted);font-size:10px">candidate</span>';
+    return `<tr id="crow-${c.id}" onclick="selectCandidate(${c.id})" style="cursor:pointer;border-bottom:1px solid var(--border)">
+        <td style="padding:10px 8px;width:32px"><input type="radio" name="candidate" value="${c.id}" onchange="selectCandidate(${c.id})"></td>
+        <td style="padding:10px 8px;font-size:12px;font-weight:600">${c.name}</td>
+        <td style="padding:10px 8px;text-align:right;font-family:monospace;font-size:12px">${acc}</td>
+        <td style="padding:10px 8px;text-align:right;font-family:monospace;font-size:12px;font-weight:700;color:${dpColor}">${dp}</td>
+        <td style="padding:10px 8px;font-size:11px;color:var(--text-muted)">${date}</td>
+        <td style="padding:10px 8px">${badge}</td>
+      </tr>`;
+  }).join('');
+  body.innerHTML = `<table style="width:100%;border-collapse:collapse">
+    <thead><tr style="border-bottom:1px solid var(--border)">
+      <th style="padding:6px 8px;width:32px"></th>
+      <th style="padding:6px 8px;text-align:left;font-size:11px;color:var(--text-muted)">NAME</th>
+      <th style="padding:6px 8px;text-align:right;font-size:11px;color:var(--text-muted)">ACCURACY</th>
+      <th style="padding:6px 8px;text-align:right;font-size:11px;color:var(--text-muted)">DIR PRECISION</th>
+      <th style="padding:6px 8px;font-size:11px;color:var(--text-muted)">SAVED</th>
+      <th style="padding:6px 8px;font-size:11px;color:var(--text-muted)">STATUS</th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+}
+
+function selectCandidate(id) {
+  _selectedCandidateId = id;
+  document.getElementById('confirmPromoteBtn').disabled = false;
+  document.querySelectorAll('[id^="crow-"]').forEach(r => r.style.background = '');
+  const row = document.getElementById('crow-' + id);
+  if (row) row.style.background = 'rgba(34,197,94,0.08)';
+  const radio = document.querySelector('input[name="candidate"][value="' + id + '"]');
+  if (radio) radio.checked = true;
+}
+
+async function confirmPromote() {
+  if (!_selectedCandidateId) return;
+  const btn = document.getElementById('confirmPromoteBtn');
+  btn.textContent = 'Promoting...'; btn.disabled = true;
+  try {
+    const resp = await fetch(`${API}/api/promote`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ strategy_id: _selectedCandidateId }),
+    });
+    const data = await resp.json();
+    if (!resp.ok || data.status === 'error') {
+      alert('Promote failed: ' + (data.error || 'HTTP ' + resp.status));
+      btn.textContent = 'Promote Selected'; btn.disabled = false;
+      return;
+    }
+    const s = data.strategy;
+    const dp = s.directional_precision != null ? (s.directional_precision * 100).toFixed(1) + '%' : '?';
+    closePromoteModal();
+    const mainBtn = document.getElementById('promoteBtn');
+    if (mainBtn) { const o = mainBtn.textContent; mainBtn.textContent = 'Active!'; setTimeout(() => { mainBtn.textContent = o; }, 3000); }
+    alert('Promoted: "' + s.name + '"\nDirectional precision: ' + dp + '\n\nThe execution agent will use this strategy on next startup.');
+  } catch(e) {
+    alert('Promote error: ' + e.message);
+    btn.textContent = 'Promote Selected'; btn.disabled = false;
+  }
+}
+
+async function saveCurrentOracle() {
+  const btn = document.getElementById('saveOracleBtn');
+  const orig = btn.textContent;
+  btn.textContent = 'Saving...'; btn.disabled = true;
+  try {
+    const resp = await fetch(`${API}/api/candidates/save`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+    });
+    const data = await resp.json();
+    if (!resp.ok || data.status === 'error') {
+      alert('Save failed: ' + (data.error || 'HTTP ' + resp.status));
+    } else {
+      btn.textContent = 'Saved!';
+      setTimeout(() => loadCandidates(), 400);
+    }
+  } catch(e) {
+    alert('Save error: ' + e.message);
+  }
+  setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 2000);
+}
+
 // ELIGIBILITY GATE
 // ═══════════════════════════════════════════════════════
 
@@ -2266,5 +2355,34 @@ refreshHealth();
 setInterval(refreshHealth, 60000);
 
 </script>
+
+  <!-- ═══ Promote Modal ═══════════════════════════════════════════════════ -->
+  <div id="promoteModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:1000;align-items:center;justify-content:center">
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;width:700px;max-width:95vw;max-height:85vh;display:flex;flex-direction:column;overflow:hidden">
+      <!-- header -->
+      <div style="padding:20px 24px 16px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+        <div>
+          <div style="font-size:16px;font-weight:700">🚀 Promote Oracle Candidate</div>
+          <div style="font-size:12px;color:var(--text-muted);margin-top:3px">Select a candidate and promote it to Active — the execution agent will load it on next start</div>
+        </div>
+        <button onclick="closePromoteModal()" style="background:none;border:none;color:var(--text-muted);font-size:20px;cursor:pointer;line-height:1">✕</button>
+      </div>
+      <!-- body -->
+      <div style="overflow-y:auto;flex:1;padding:16px 24px">
+        <div id="promoteModalBody">
+          <div style="color:var(--text-muted);text-align:center;padding:32px">Loading candidates…</div>
+        </div>
+      </div>
+      <!-- footer -->
+      <div style="padding:16px 24px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;gap:12px">
+        <button class="btn btn-ghost" onclick="saveCurrentOracle()" id="saveOracleBtn" title="Save the current in-memory Oracle params as a new candidate">💾 Save Current Oracle</button>
+        <div style="display:flex;gap:10px">
+          <button class="btn btn-ghost" onclick="closePromoteModal()">Cancel</button>
+          <button class="btn btn-success" id="confirmPromoteBtn" onclick="confirmPromote()" disabled>🚀 Promote Selected</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
 </body>
 </html>

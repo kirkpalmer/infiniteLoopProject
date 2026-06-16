@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Any
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -466,6 +466,20 @@ async def _run_loop_task(
         else:
             STATE.oracle = best
         STATE.current_results = run_oracle_backtest(STATE.features_is, STATE.oracle, "outcome")
+        # Auto-save the best params as a candidate so the Promote UI has something to show
+        try:
+            from strategy.registry import StrategyRegistry
+            _cname = f"oracle_{datetime.now().strftime('%Y%m%d_%H%M')}"
+            StrategyRegistry().save_oracle_candidate(
+                name=_cname,
+                oracle_params=STATE.oracle.get_params(),
+                results=STATE.current_results,
+                notes=f"auto-saved after Hermes loop ({sum(1 for r in run_records if r.get('ok'))} accepted / {len(run_records)} iterations)",
+            )
+            LOGGER.info("Auto-saved Oracle candidate '%s' to strategies table", _cname)
+        except Exception as _exc:
+            LOGGER.warning("Auto-save to strategies failed: %s", _exc)
+
         await _broadcast({
             "type": "loop_complete",
             "data": {
@@ -584,6 +598,20 @@ async def _run_sweep_task(n_trials: int) -> None:
             "failed_trials": result.n_failed,
             "importances": result.param_importances,
         }
+        # Auto-save the best params as a candidate
+        try:
+            from strategy.registry import StrategyRegistry
+            _cname = f"oracle_sweep_{datetime.now().strftime('%Y%m%d_%H%M')}"
+            StrategyRegistry().save_oracle_candidate(
+                name=_cname,
+                oracle_params=STATE.oracle.get_params(),
+                results=STATE.current_results,
+                notes=f"auto-saved after Optuna sweep ({result.n_trials} trials, {result.n_failed} failed)",
+            )
+            LOGGER.info("Auto-saved Oracle candidate '%s' to strategies table", _cname)
+        except Exception as _exc:
+            LOGGER.warning("Auto-save to strategies (sweep) failed: %s", _exc)
+
         await _broadcast({
             "type": "loop_complete",
             "data": {
@@ -1510,6 +1538,50 @@ async def get_agent_events(limit: int = 50) -> JSONResponse:
     return JSONResponse({"events": rows})
 
 
+
+
+@app.post("/api/candidates/save")
+async def save_current_candidate(request: Request) -> JSONResponse:
+    """
+    Save the current in-memory Oracle params as a named candidate in the strategies table.
+    Body (JSON): { "name": str (optional) }
+    """
+    if not STATE.ready or STATE.current_results is None:
+        return JSONResponse({"status": "error", "error": "No Oracle results in memory. Run a sweep or Hermes loop first."}, status_code=400)
+
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+
+    name = body.get("name") or f"oracle_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    notes = body.get("notes", "manually saved from dashboard")
+
+    loop = asyncio.get_event_loop()
+    def _save():
+        from strategy.registry import StrategyRegistry
+        reg = StrategyRegistry()
+        row_id = reg.save_oracle_candidate(
+            name=name,
+            oracle_params=STATE.oracle.get_params(),
+            results=STATE.current_results,
+            notes=notes,
+        )
+        return row_id
+
+    try:
+        row_id = await loop.run_in_executor(None, _save)
+        return JSONResponse({
+            "status": "ok",
+            "id": row_id,
+            "name": name,
+            "overall_accuracy": STATE.current_results.overall_accuracy,
+            "directional_precision": STATE.current_results.directional_precision,
+        })
+    except Exception as exc:
+        LOGGER.error("save_current_candidate failed: %s", exc)
+        return JSONResponse({"status": "error", "error": str(exc)}, status_code=500)
 
 
 @app.post("/api/promote")
