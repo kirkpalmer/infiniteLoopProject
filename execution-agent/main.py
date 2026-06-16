@@ -230,7 +230,7 @@ def _fetch_prior_day_context(api_client=None) -> PriorDayContext:
     es_closes: list[float] = []
     try:
         resp = client.futures_market_data.get_futures_history_bars(
-            symbols=["ESc1"],
+            symbols=["ESmain"],
             category=Category.US_FUTURES,
             timespan="d1",
             count="5",
@@ -247,7 +247,7 @@ def _fetch_prior_day_context(api_client=None) -> PriorDayContext:
     current_vix: float = _FALLBACK_PRIOR_CTX["current_vix"]
     try:
         resp_vx = client.futures_market_data.get_futures_snapshot(
-            symbols=["VXc1"],
+            symbols=["VXmain"],
             category=Category.US_FUTURES,
         )
         body = getattr(resp_vx, "body", None)

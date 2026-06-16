@@ -36,7 +36,7 @@ LOGGER = logging.getLogger("infiniteloop.data.feed")
 EASTERN = pytz.timezone("US/Eastern")
 
 # ES continuous front-month contract symbol for Webull futures feed
-ES_SYMBOL   = "ESc1"
+ES_SYMBOL   = "ESmain"   # Webull continuous front-month notation (not Reuters ESc1)
 ES_CATEGORY = "US_FUTURES"
 
 # SDK streaming sub-type for real-time snapshot updates
