@@ -1113,7 +1113,7 @@ async def get_strategies() -> JSONResponse:
     try:
         from strategy.registry import StrategyRegistry
         reg = StrategyRegistry()
-        strategies = reg.list_strategies()
+        strategies = reg.list_candidates()
         if strategies:
             return JSONResponse({"strategies": strategies})
     except Exception:
@@ -1352,15 +1352,14 @@ def _generate_report_sync() -> str:
             "days": days,
             "skip_rate": round(oos_results.skip_rate, 4),
             "skip_reasons": oos_results.skip_reasons,
-            "confidence_buckets": confidence_buckets(oos_results.raw),
         }
 
     run_summary = None
     if STATE.oracle_registry is not None:
         try:
-            run_summary = STATE.oracle_registry.get_run_summary()
-        except Exception as exc:
-            LOGGER.warning("Run summary failed for report: %s", exc)
+            run_summary = STATE.oracle_registry.load_cross_session_history(limit=20)
+        except Exception:
+            pass
 
     return build_report(
         params=STATE.oracle.get_params(),
@@ -1377,71 +1376,211 @@ def _generate_report_sync() -> str:
     )
 
 
-@app.get("/api/oracle/report")
-async def download_report() -> Response:
-    """Generate and download the full Oracle status report (markdown).
-    A copy is also saved to strategy-lab/logs/."""
+@app.get("/api/report")
+async def get_report() -> Response:
     if not STATE.ready:
-        raise HTTPException(503, detail="Data pipeline not ready yet")
-
-    text = await asyncio.get_event_loop().run_in_executor(None, _generate_report_sync)
-
-    filename = f"oracle_report_{datetime.now().strftime('%Y%m%d_%H%M')}.md"
-    try:
-        logs_dir = HERE / "logs"
-        logs_dir.mkdir(parents=True, exist_ok=True)
-        (logs_dir / filename).write_text(text, encoding="utf-8")
-    except OSError as exc:
-        LOGGER.warning("Could not save report copy to logs/: %s", exc)
-
+        raise HTTPException(status_code=503, detail="Pipeline not ready")
+    loop = asyncio.get_event_loop()
+    report_text = await loop.run_in_executor(None, _generate_report_sync)
     return Response(
-        content=text,
-        media_type="text/markdown; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        content=report_text,
+        media_type="text/plain",
+        headers={"Content-Disposition": "attachment; filename=oracle_report.txt"},
     )
 
 
 # ---------------------------------------------------------------------------
-# Serve dashboard SPA
+# REST — Agent (Execution Agent paper trading monitor)
 # ---------------------------------------------------------------------------
 
-@app.get("/")
-async def serve_dashboard() -> Response:
-    html_path = DASHBOARD_DIR / "index.html"
-    if not html_path.exists():
-        raise HTTPException(404, detail=f"Dashboard not found at {html_path}")
-    content = html_path.read_text(encoding="utf-8")
-    return Response(content=content, media_type="text/html")
+def _agent_db_query(sql: str, params: tuple = ()) -> list[dict]:
+    """Run a read-only query against the shared PostgreSQL database."""
+    import psycopg2
+    import psycopg2.extras
+    import os
+    db_url = os.getenv("DATABASE_URL", "")
+    if not db_url:
+        return []
+    try:
+        conn = psycopg2.connect(db_url)
+        conn.autocommit = True
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+    except Exception as exc:
+        LOGGER.warning("Agent DB query failed: %s", exc)
+        return []
 
 
-@app.get("/{page}.html")
-async def serve_page(page: str) -> Response:
-    html_path = DASHBOARD_DIR / f"{page}.html"
-    if not html_path.exists():
-        raise HTTPException(404, detail=f"Page not found: {page}.html")
-    content = html_path.read_text(encoding="utf-8")
-    return Response(content=content, media_type="text/html")
+@app.get("/api/agent/trades")
+async def get_agent_trades(limit: int = 100) -> JSONResponse:
+    """Return recent paper trades from the execution agent."""
+    loop = asyncio.get_event_loop()
+
+    def _query():
+        rows = _agent_db_query(
+            """
+            SELECT id, trade_date, direction, spread_type,
+                   spread_width, contracts,
+                   entry_credit_pts, entry_credit_usd, max_loss_usd,
+                   spx_price_at_entry, vix_at_entry, oracle_confidence,
+                   exit_debit_pts, exit_debit_usd,
+                   realized_pnl_usd, exit_reason, exit_time,
+                   status, is_paper, created_at
+            FROM trades
+            ORDER BY created_at DESC NULLS LAST
+            LIMIT %s
+            """,
+            (limit,),
+        )
+        for r in rows:
+            for k in ("exit_time", "trade_date", "created_at"):
+                if r.get(k) is not None and hasattr(r[k], "isoformat"):
+                    r[k] = r[k].isoformat()
+            for k in ("entry_credit_pts", "entry_credit_usd", "max_loss_usd",
+                      "exit_debit_pts", "exit_debit_usd", "realized_pnl_usd",
+                      "oracle_confidence", "spx_price_at_entry", "vix_at_entry",
+                      "spread_width"):
+                if r.get(k) is not None:
+                    r[k] = float(r[k])
+        return rows
+
+    rows = await loop.run_in_executor(None, _query)
+    return JSONResponse({"trades": rows, "count": len(rows)})
+
+
+@app.get("/api/agent/equity")
+async def get_agent_equity(days: int = 90) -> JSONResponse:
+    """Return equity snapshots for the equity curve chart."""
+    loop = asyncio.get_event_loop()
+
+    def _query():
+        rows = _agent_db_query(
+            """
+            SELECT snapshot_date, equity, daily_pnl, daily_trades, note
+            FROM equity_snapshots
+            ORDER BY snapshot_date DESC
+            LIMIT %s
+            """,
+            (days,),
+        )
+        for r in rows:
+            if r.get("snapshot_date") is not None and hasattr(r["snapshot_date"], "isoformat"):
+                r["snapshot_date"] = r["snapshot_date"].isoformat()
+            for k in ("equity", "daily_pnl"):
+                if r.get(k) is not None:
+                    r[k] = float(r[k])
+        return list(reversed(rows))  # chronological order for charts
+
+    rows = await loop.run_in_executor(None, _query)
+    return JSONResponse({"equity": rows})
+
+
+@app.get("/api/agent/events")
+async def get_agent_events(limit: int = 50) -> JSONResponse:
+    """Return recent portfolio events (skips, halts, etc.) from the execution agent."""
+    loop = asyncio.get_event_loop()
+
+    def _query():
+        rows = _agent_db_query(
+            """
+            SELECT id, event_type, event_time, details, created_at
+            FROM portfolio_events
+            ORDER BY event_time DESC NULLS LAST
+            LIMIT %s
+            """,
+            (limit,),
+        )
+        for r in rows:
+            for k in ("event_time", "created_at"):
+                if r.get(k) is not None and hasattr(r[k], "isoformat"):
+                    r[k] = r[k].isoformat()
+            # details is JSONB — psycopg2 returns a dict; convert strings just in case
+            if isinstance(r.get("details"), str):
+                try:
+                    import json as _json
+                    r["details"] = _json.loads(r["details"])
+                except Exception:
+                    pass
+        return rows
+
+    rows = await loop.run_in_executor(None, _query)
+    return JSONResponse({"events": rows})
+
+
+
+
+@app.post("/api/promote")
+async def promote_strategy(request: Request) -> JSONResponse:
+    """
+    Promote a strategy candidate to 'active' so the execution agent picks it up.
+
+    Body (JSON):
+        strategy_id: int    (optional) -- if omitted, promotes the best candidate
+                                          by directional_precision
+        trade_params: dict  (optional) -- override default trade params
+        notes: str          (optional)
+
+    Returns the promoted strategy row.
+    """
+    loop = asyncio.get_event_loop()
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+
+    strategy_id: int | None = body.get("strategy_id")
+    trade_params: dict | None = body.get("trade_params")
+    notes: str | None = body.get("notes")
+
+    def _promote():
+        from strategy.registry import StrategyRegistry
+        reg = StrategyRegistry()
+
+        # If no strategy_id given, pick the best candidate
+        if not strategy_id:
+            best = reg.get_best_oracle_params()
+            if best is None:
+                raise ValueError("No strategy candidates found. Run Oracle and save a candidate first.")
+            sid = best["id"]
+        else:
+            sid = strategy_id
+
+        ok = reg.promote_strategy(sid, trade_params=trade_params, notes=notes)
+        if not ok:
+            raise ValueError(f"Strategy id={sid} not found in strategies table")
+
+        active = reg.get_active_strategy()
+        return active
+
+    try:
+        result = await loop.run_in_executor(None, _promote)
+        LOGGER.info("Promoted strategy id=%s to active", result.get("id"))
+        return JSONResponse({"status": "ok", "strategy": result})
+    except ValueError as exc:
+        return JSONResponse({"status": "error", "error": str(exc)}, status_code=400)
+    except Exception as exc:
+        LOGGER.error("promote_strategy failed: %s", exc)
+        return JSONResponse({"status": "error", "error": str(exc)}, status_code=500)
+
+# ---------------------------------------------------------------------------
+# Static files + SPA fallback
+# ---------------------------------------------------------------------------
+
+app.mount("/", StaticFiles(directory=str(DASHBOARD_DIR), html=True), name="static")
 
 
 # ---------------------------------------------------------------------------
-# CLI entry point
+# Entrypoint
 # ---------------------------------------------------------------------------
-
-def main() -> None:
-    import argparse
-    parser = argparse.ArgumentParser(description="InfiniteLoop Dashboard Server")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8000)
-    parser.add_argument("--reload", action="store_true")
-    args = parser.parse_args()
-    uvicorn.run(
-        "server:app",
-        host=args.host,
-        port=args.port,
-        reload=args.reload,
-        log_level="info",
-    )
-
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--host", type=str, default="0.0.0.0")
+    args = parser.parse_args()
+    uvicorn.run("server:app", host=args.host, port=args.port, reload=False)

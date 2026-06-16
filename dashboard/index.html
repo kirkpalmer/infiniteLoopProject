@@ -423,11 +423,8 @@ select.rp-input option { background: var(--surface2); }
   <div class="nav-item" data-page="strategies" onclick="nav(this)">
     <span class="ni">🧬</span> Strategies
   </div>
-  <div class="nav-item" style="opacity:.4;cursor:not-allowed">
-    <span class="ni">📊</span> Portfolio <span class="soon">Soon</span>
-  </div>
-  <div class="nav-item" style="opacity:.4;cursor:not-allowed">
-    <span class="ni">📋</span> Trade Log <span class="soon">Soon</span>
+  <div class="nav-item" data-page="agent" onclick="nav(this)">
+    <span class="ni">🤖</span> Execution Agent
   </div>
 
   <div class="sidebar-spacer"></div>
@@ -473,6 +470,7 @@ select.rp-input option { background: var(--surface2); }
           <button class="btn btn-ghost" onclick="window.location='/api/oracle/report'" title="Download full status report (markdown): params, IS/OOS, eligibility, walk-forward, daily signals">⬇ Report</button>
           <button class="btn btn-primary" id="oracleSweepBtn" onclick="runOracleSweep()" title="Optuna TPE sweep over all thresholds — hundreds of backtests, no LLM needed">⚡ Run Sweep</button>
           <button class="btn btn-ghost" id="oracleRunBtn" onclick="runOracleLoop()">▶ Hermes Loop</button>
+          <button class="btn btn-success" id="promoteBtn" onclick="promoteStrategy()" title="Promote best Oracle candidate to active — execution agent will start using it">🚀 Promote to Active</button>
         </div>
       </div>
 
@@ -837,6 +835,117 @@ select.rp-input option { background: var(--surface2); }
 
   </div><!-- /content -->
 </div><!-- /main -->
+    <!-- ═══════ EXECUTION AGENT PAGE ═══════ -->
+    <div class="page" id="page-agent">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px">
+        <div>
+          <div style="font-size:20px;font-weight:800;margin-bottom:3px">🤖 Execution Agent</div>
+          <div style="font-size:12px;color:var(--text-muted)">Live paper trading monitor — 0DTE SPX spreads. Auto-refreshes every 30s.</div>
+        </div>
+        <button class="btn btn-ghost" style="font-size:12px" onclick="loadAgentPage()">↻ Refresh</button>
+      </div>
+
+      <div id="agent-error" style="display:none;background:rgba(248,113,113,.1);border:1px solid rgba(248,113,113,.25);border-radius:8px;padding:10px 14px;color:var(--down);font-size:12px;margin-bottom:16px"></div>
+
+      <!-- ── Top stats row ── -->
+      <div class="grid4" style="margin-bottom:16px">
+        <div class="card">
+          <div class="card-sub">Total Trades</div>
+          <div class="metric-val" id="ag-stat-trades">—</div>
+          <div class="metric-label">paper filled</div>
+        </div>
+        <div class="card">
+          <div class="card-sub">Win Rate</div>
+          <div class="metric-val" id="ag-stat-winrate" style="color:var(--up)">—</div>
+          <div class="metric-label">closed positions</div>
+        </div>
+        <div class="card">
+          <div class="card-sub">Total P&amp;L</div>
+          <div class="metric-val" id="ag-stat-pnl">—</div>
+          <div class="metric-label">paper dollars</div>
+        </div>
+        <div class="card">
+          <div class="card-sub">Avg P&amp;L / Trade</div>
+          <div class="metric-val" id="ag-stat-avgpnl">—</div>
+          <div class="metric-label">per closed trade</div>
+        </div>
+      </div>
+
+      <!-- ── Equity + Open position ── -->
+      <div class="grid2" style="margin-bottom:16px">
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <div class="card-title">Equity Curve</div>
+              <div class="card-sub" id="ag-stat-equity" style="font-size:15px;font-weight:800;color:var(--accent);margin-top:4px">$5,000</div>
+            </div>
+          </div>
+          <div class="chart-wrap" style="height:160px">
+            <canvas id="ag-equity-chart"></canvas>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Open Position</div>
+            <div style="font-size:10px;color:var(--text-faint);font-family:var(--mono)">PAPER MODE</div>
+          </div>
+          <div id="ag-open-position">
+            <div style="text-align:center;color:var(--text-faint);padding:24px 0;font-size:12px">Loading…</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Events + (placeholder for confidence buckets) ── -->
+      <div class="grid2" style="margin-bottom:16px">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Recent Events</div>
+            <div class="card-sub">skips · halts · watchdog</div>
+          </div>
+          <div id="ag-events" class="param-list">
+            <div style="color:var(--text-faint);font-size:12px;padding:8px">Loading…</div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">By Direction</div>
+            <div class="card-sub">breakdown when data available</div>
+          </div>
+          <div id="ag-direction-breakdown">
+            <div style="color:var(--text-faint);font-size:12px;padding:8px">Populates after first trades</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Trade log ── -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Trade Log</div>
+          <div class="card-sub">most recent first · paper mode</div>
+        </div>
+        <div style="overflow-x:auto">
+          <table class="iter-table" style="min-width:700px">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Dir</th>
+                <th>Type</th>
+                <th>Strikes</th>
+                <th>Credit</th>
+                <th>Confidence</th>
+                <th>Entry</th>
+                <th>P&amp;L</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="ag-trade-tbody">
+              <tr><td colspan="9" style="text-align:center;color:var(--text-faint);padding:20px">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
 
 <script>
 // ═══════════════════════════════════════════════════════
@@ -1285,6 +1394,49 @@ async function oracleRefresh() {
   } catch(e) {
     console.error('[Refresh failed]', e);
     if (btn) { btn.textContent = '↻ Error'; btn.style.color = 'var(--down)'; setTimeout(() => { btn.textContent = orig; btn.style.color = ''; btn.disabled = false; }, 1500); }
+  }
+}
+
+
+// ═══════════════════════════════════════════════════════
+// PROMOTE TO ACTIVE
+// ═══════════════════════════════════════════════════════
+
+async function promoteStrategy(strategyId) {
+  const btn = document.getElementById('promoteBtn');
+  const orig = btn ? btn.textContent : null;
+  if (btn) { btn.textContent = '🚀 Promoting…'; btn.disabled = true; }
+
+  try {
+    const body = strategyId ? { strategy_id: strategyId } : {};
+    const resp = await fetch(`${API}/api/promote`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await resp.json();
+
+    if (!resp.ok || data.status === 'error') {
+      const msg = data.error || `HTTP ${resp.status}`;
+      alert('Promote failed: ' + msg);
+      if (btn) { btn.textContent = '🚀 Error'; btn.style.color = 'var(--down)'; setTimeout(() => { btn.textContent = orig; btn.style.color = ''; btn.disabled = false; }, 2000); }
+      return;
+    }
+
+    const s = data.strategy;
+    const acc = s.overall_accuracy != null ? (s.overall_accuracy * 100).toFixed(1) + '%' : '?';
+    const dp  = s.directional_precision != null ? (s.directional_precision * 100).toFixed(1) + '%' : '?';
+    const msg = `✅ Promoted: "${s.name}"
+Accuracy: ${acc}  Directional precision: ${dp}
+
+The execution agent will load this strategy on next startup.`;
+    alert(msg);
+
+    if (btn) { btn.textContent = '✅ Promoted!'; setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 3000); }
+  } catch(e) {
+    console.error('[Promote failed]', e);
+    alert('Promote error: ' + e.message);
+    if (btn) { btn.textContent = '🚀 Error'; setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 2000); }
   }
 }
 
@@ -1923,39 +2075,196 @@ async function refreshHealth() {
         dbChip.innerHTML = `DB: <span style="color:var(--up)">Postgres ✓</span> <span style="color:var(--text-muted)">(${db.iterations} iters)</span>`;
       } else if (db.ok && db.backend === 'sqlite') {
         dbChip.innerHTML = `DB: <span style="color:var(--warn)">SQLite fallback</span> <span style="color:var(--text-muted)">(${db.iterations} iters)</span>`;
-        dbChip.title = 'Postgres unreachable — history is being saved locally to strategy-lab/data/oracle_history.db';
-      } else {
-        dbChip.innerHTML = `DB: <span style="color:var(--down)">NOT PERSISTING ✗</span>`;
-        dbChip.title = db.error || 'No registry available — iterations will be lost!';
+        dbChip      } else {
+        dbChip.innerHTML = `DB: <span style="color:var(--down)">No DB ✗</span>`;
       }
     }
     if (hChip) {
-      hChip.innerHTML = h.hermes && h.hermes.ok
-        ? `Hermes: <span style="color:var(--up)">${h.hermes.model} ✓</span>`
-        : `Hermes: <span style="color:var(--down)">offline ✗</span>`;
-      if (h.hermes && !h.hermes.ok) hChip.title = 'Start Ollama (`ollama serve`) and pull hermes3';
+      if (h.hermes && h.hermes.ok) {
+        hChip.innerHTML = `Hermes: <span style="color:var(--up)">${h.hermes.model||'ok'} ✓</span>`;
+      } else {
+        hChip.innerHTML = `Hermes: <span style="color:var(--down)">Offline ✗</span>`;
+      }
     }
   } catch(e) {
-    if (dbChip) dbChip.innerHTML = `DB: <span style="color:var(--down)">?</span>`;
-    if (hChip)  hChip.innerHTML  = `Hermes: <span style="color:var(--down)">?</span>`;
+    if (dbChip) dbChip.textContent = 'DB: err';
+    if (hChip)  hChip.textContent  = 'Hermes: err';
   }
 }
 
-// ===============================================================
-// BOOT — this was missing entirely (the file used to end mid-function,
-// which broke the whole script block). Everything starts here.
-// ===============================================================
-document.addEventListener('DOMContentLoaded', () => {
-  initOracleChart();
-  buildLockGrid();
-  renderOracleParams();
-  renderIterLog();
-  connectWS();          // live updates + initial state push from server
-  oracleRefresh();      // initial /api/status pull (includes hydrated history)
-  loadStrategies();
-  refreshHealth();
-  setInterval(refreshHealth, 30000);
-});
+// ===================================================
+// AGENT PAGE — paper trading monitor
+// ===================================================
+const AGENT_API = `${API}/api/agent`;
+let _agentInterval = null;
+
+function nav(el) {
+  document.querySelectorAll('.nav-item[data-page]').forEach(n => n.classList.remove('active'));
+  el.classList.add('active');
+  const page = el.dataset.page;
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.getElementById('page-' + page).classList.add('active');
+  const labels = { oracle:'Oracle', strategies:'Strategies', hermes:'Hermes Chat', agent:'Execution Agent' };
+  document.getElementById('crumb').innerHTML = `Agents → <span>${labels[page]||page}</span>`;
+  if (page === 'hermes') maybeOpeningAnalysis();
+  // Start/stop agent auto-refresh
+  if (page === 'agent') {
+    loadAgentPage();
+    if (!_agentInterval) _agentInterval = setInterval(loadAgentPage, 30000);
+  } else {
+    clearInterval(_agentInterval);
+    _agentInterval = null;
+  }
+}
+
+async function loadAgentPage() {
+  try {
+    const [tRes, eRes, evRes] = await Promise.all([
+      fetch(`${AGENT_API}/trades?limit=100`),
+      fetch(`${AGENT_API}/equity?days=90`),
+      fetch(`${AGENT_API}/events?limit=30`),
+    ]);
+    const trades  = tRes.ok  ? (await tRes.json()).trades   : [];
+    const equity  = eRes.ok  ? (await eRes.json()).equity   : [];
+    const events  = evRes.ok ? (await evRes.json()).events  : [];
+    renderAgentPage(trades, equity, events);
+  } catch(e) {
+    document.getElementById('agent-error').textContent = 'Load failed: ' + e.message;
+    document.getElementById('agent-error').style.display = 'block';
+  }
+}
+
+function renderAgentPage(trades, equity, events) {
+  document.getElementById('agent-error').style.display = 'none';
+
+  // ── Summary stats ──────────────────────────────────────────────────────
+  const closed = trades.filter(t => t.status === 'closed' || t.exit_time);
+  const wins   = closed.filter(t => (t.realized_pnl_dollars||0) > 0);
+  const totalPnl = closed.reduce((s,t) => s + (t.realized_pnl_dollars||0), 0);
+  const avgPnl   = closed.length ? totalPnl / closed.length : 0;
+  const openPos  = trades.find(t => t.status === 'open' || (!t.exit_time && t.entry_time));
+  const latestEq = equity.length ? equity[equity.length-1].equity : null;
+  const startEq  = equity.length ? equity[0].equity : 5000;
+
+  document.getElementById('ag-stat-trades').textContent = closed.length;
+  document.getElementById('ag-stat-winrate').textContent = closed.length
+    ? `${(wins.length/closed.length*100).toFixed(1)}%` : '—';
+  document.getElementById('ag-stat-pnl').textContent =
+    `${totalPnl >= 0 ? '+' : ''}$${totalPnl.toFixed(0)}`;
+  document.getElementById('ag-stat-pnl').style.color =
+    totalPnl >= 0 ? 'var(--up)' : 'var(--down)';
+  document.getElementById('ag-stat-avgpnl').textContent =
+    closed.length ? `${avgPnl >= 0 ? '+' : ''}$${avgPnl.toFixed(0)}` : '—';
+  document.getElementById('ag-stat-equity').textContent =
+    latestEq ? `$${latestEq.toFixed(0)}` : '$5,000';
+
+  // ── Open position ──────────────────────────────────────────────────────
+  const posBox = document.getElementById('ag-open-position');
+  if (openPos) {
+    const credit = (openPos.entry_credit_dollars||0).toFixed(0);
+    const dirClass = openPos.direction === 'UP' ? 'badge-up'
+                   : openPos.direction === 'DOWN' ? 'badge-down' : 'badge-neu';
+    posBox.innerHTML = `
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+        <span class="metric-badge ${dirClass}">${openPos.direction}</span>
+        <span style="font-weight:700">${openPos.spread_type||''}</span>
+        <span style="color:var(--text-muted);font-size:11px">${openPos.trade_date||''}</span>
+      </div>
+      <div class="grid4">
+        <div><div class="metric-label">Short Strike</div><div class="metric-val" style="font-size:18px">${openPos.short_strike||'—'}</div></div>
+        <div><div class="metric-label">Long Strike</div><div class="metric-val" style="font-size:18px">${openPos.long_strike||'—'}</div></div>
+        <div><div class="metric-label">Credit</div><div class="metric-val" style="font-size:18px;color:var(--up)">$${credit}</div></div>
+        <div><div class="metric-label">Max Loss</div><div class="metric-val" style="font-size:18px;color:var(--down)">$${(openPos.max_loss_dollars||0).toFixed(0)}</div></div>
+      </div>`;
+  } else {
+    posBox.innerHTML = `<div style="text-align:center;color:var(--text-faint);padding:24px 0;font-size:12px">No open position — flat</div>`;
+  }
+
+  // ── Equity curve ───────────────────────────────────────────────────────
+  const eqCanvas = document.getElementById('ag-equity-chart');
+  if (equity.length > 1 && eqCanvas) {
+    const labels = equity.map(e => e.snapshot_date ? e.snapshot_date.slice(0,10) : '');
+    const values = equity.map(e => e.equity);
+    const existing = Chart.getChart(eqCanvas);
+    if (existing) existing.destroy();
+    new Chart(eqCanvas, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          data: values,
+          borderColor: '#7fff00',
+          backgroundColor: 'rgba(127,255,0,0.06)',
+          borderWidth: 1.5,
+          pointRadius: 0,
+          fill: true,
+          tension: 0.3,
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { ticks: { color:'#6b7394', maxTicksLimit: 8 }, grid: { color:'#2a2f45' } },
+          y: { ticks: { color:'#6b7394', callback: v => '$'+v.toFixed(0) }, grid: { color:'#2a2f45' } },
+        },
+      }
+    });
+  } else if (eqCanvas) {
+    const ctx = eqCanvas.getContext('2d');
+    ctx.clearRect(0,0,eqCanvas.width,eqCanvas.height);
+  }
+
+  // ── Recent events ──────────────────────────────────────────────────────
+  const evEl = document.getElementById('ag-events');
+  if (events.length) {
+    evEl.innerHTML = events.slice(0,8).map(ev => {
+      const data = ev.event_data || {};
+      const ts = ev.created_at ? ev.created_at.slice(0,16).replace('T',' ') : '';
+      const detail = data.reason || data.direction || data.skip_reason || '';
+      return `<div class="param-row"><span class="p-name">${ts}</span>
+        <span style="font-size:11.5px;color:var(--text)">${ev.event_type}</span>
+        <span class="p-val" style="font-size:11px;color:var(--text-muted)">${detail}</span></div>`;
+    }).join('');
+  } else {
+    evEl.innerHTML = '<div style="color:var(--text-faint);font-size:12px;padding:8px">No events yet</div>';
+  }
+
+  // ── Trade log table ────────────────────────────────────────────────────
+  const tbody = document.getElementById('ag-trade-tbody');
+  if (!trades.length) {
+    tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;color:var(--text-faint);padding:20px">No trades yet — execution agent is running in paper mode</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = trades.map(t => {
+    const dirClass = t.direction === 'UP' ? 'badge-up' : t.direction === 'DOWN' ? 'badge-down' : 'badge-neu';
+    const pnl = t.realized_pnl_dollars;
+    const pnlStr = pnl != null ? `${pnl>=0?'+':''}$${pnl.toFixed(0)}` : '—';
+    const pnlColor = pnl == null ? 'var(--text-muted)' : pnl >= 0 ? 'var(--up)' : 'var(--down)';
+    const status = t.exit_time ? (t.exit_reason||'closed') : '<span style="color:var(--warn)">OPEN</span>';
+    const conf = t.oracle_confidence != null ? `${(t.oracle_confidence*100).toFixed(0)}%` : '—';
+    const credit = t.entry_credit_dollars != null ? `$${t.entry_credit_dollars.toFixed(0)}` : '—';
+    const entry = t.entry_time ? t.entry_time.slice(11,16) : '—';
+    return `<tr>
+      <td>${t.trade_date||''}</td>
+      <td><span class="metric-badge ${dirClass}" style="font-size:10px">${t.direction||'—'}</span></td>
+      <td style="font-family:var(--mono);font-size:11.5px">${(t.spread_type||'').replace('_',' ')}</td>
+      <td style="font-family:var(--mono)">${t.short_strike||'—'} / ${t.long_strike||'—'}</td>
+      <td style="color:var(--up)">${credit}</td>
+      <td>${conf}</td>
+      <td>${entry}</td>
+      <td style="font-weight:700;color:${pnlColor}">${pnlStr}</td>
+      <td style="font-size:11px;color:var(--text-muted)">${status}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ===================================================
+// INIT
+// ===================================================
+refreshHealth();
+setInterval(refreshHealth, 60000);
+
 </script>
 </body>
 </html>
