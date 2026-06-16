@@ -1,0 +1,1961 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>InfiniteLoop — 0DTE SPX Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+:root {
+  --bg: #0f1117;
+  --surface: #161922;
+  --surface2: #1e2235;
+  --surface3: #252a40;
+  --border: #2a2f45;
+  --border2: #333a55;
+  --accent: #7fff00;
+  --accent-dim: rgba(127,255,0,0.12);
+  --accent2: #00c6ff;
+  --text: #dde1f0;
+  --text-muted: #6b7394;
+  --text-faint: #404766;
+  --up: #4ade80;
+  --down: #f87171;
+  --neutral: #60a5fa;
+  --skip: #a78bfa;
+  --warn: #fbbf24;
+  --r: 12px;
+  --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --mono: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; overflow: hidden; }
+body { background: var(--bg); color: var(--text); font-family: var(--font); display: flex; font-size: 14px; }
+a { text-decoration: none; color: inherit; }
+button { cursor: pointer; font-family: var(--font); }
+
+/* ── SIDEBAR ─────────────────────────────── */
+.sidebar {
+  width: 210px; min-height: 100vh; background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; padding: 20px 14px; flex-shrink: 0;
+}
+.logo { display: flex; align-items: center; gap: 10px; margin-bottom: 28px; padding: 0 4px; }
+.logo-icon {
+  width: 32px; height: 32px;
+  background: linear-gradient(135deg, var(--accent) 0%, #00ffaa 100%);
+  border-radius: 8px; display: flex; align-items: center; justify-content: center;
+  font-size: 17px; font-weight: 900; color: #000; flex-shrink: 0;
+}
+.logo-name { font-size: 15px; font-weight: 800; letter-spacing: 0.3px; }
+.logo-sub { font-size: 9.5px; color: var(--text-muted); letter-spacing: 0.5px; }
+
+.nav-label {
+  font-size: 9.5px; font-weight: 700; letter-spacing: 1.8px;
+  color: var(--text-faint); text-transform: uppercase; margin: 18px 0 6px 8px;
+}
+.nav-item {
+  display: flex; align-items: center; gap: 9px;
+  padding: 8px 10px; border-radius: 8px; cursor: pointer;
+  font-size: 13px; color: var(--text-muted); transition: all 0.12s;
+  margin-bottom: 1px; user-select: none;
+}
+.nav-item:hover { background: var(--surface2); color: var(--text); }
+.nav-item.active { background: var(--accent-dim); color: var(--accent); font-weight: 600; }
+.nav-item .ni { font-size: 15px; width: 18px; text-align: center; }
+.nav-item .soon {
+  margin-left: auto; font-size: 9px; background: var(--surface3);
+  color: var(--text-faint); padding: 1px 5px; border-radius: 4px;
+}
+
+.sidebar-spacer { flex: 1; }
+.sidebar-footer { border-top: 1px solid var(--border); padding-top: 14px; }
+.agent-pill {
+  display: flex; align-items: center; gap: 7px;
+  padding: 7px 10px; background: var(--surface2); border-radius: 8px;
+  font-size: 11.5px; margin-bottom: 8px;
+}
+.agent-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--up); animation: blink 2s infinite; }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.35} }
+.agent-name { font-weight: 700; }
+.agent-status { color: var(--text-muted); font-size: 10.5px; }
+.equity-row { padding: 4px 10px; }
+.equity-label { font-size: 10px; color: var(--text-muted); }
+.equity-val { font-size: 15px; font-weight: 800; color: var(--accent); }
+
+/* ── MAIN ─────────────────────────────────── */
+.main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.topbar {
+  height: 54px; background: var(--surface); border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 28px; flex-shrink: 0;
+}
+.topbar-left { display: flex; align-items: center; gap: 8px; }
+.page-crumb { font-size: 12px; color: var(--text-muted); }
+.page-crumb span { color: var(--text); font-weight: 600; }
+.topbar-right { display: flex; align-items: center; gap: 10px; }
+.market-pill {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11.5px; padding: 5px 11px; border-radius: 20px;
+  background: var(--surface2); border: 1px solid var(--border);
+}
+.market-up { color: var(--up); }
+.market-down { color: var(--down); }
+
+.content { flex: 1; overflow-y: auto; padding: 24px 28px; }
+
+/* ── PAGES ───────────────────────────────── */
+.page { display: none; }
+.page.active { display: block; }
+
+/* ── CARDS ───────────────────────────────── */
+.card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r); padding: 18px 20px;
+}
+.card-title { font-size: 13.5px; font-weight: 700; }
+.card-sub { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.card-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 14px; }
+.card-action { font-size: 11px; color: var(--text-muted); cursor: pointer; }
+.card-action:hover { color: var(--accent); }
+
+.metric-val { font-size: 26px; font-weight: 800; line-height: 1; margin: 10px 0 4px; }
+.metric-label { font-size: 11px; color: var(--text-muted); }
+.metric-badge {
+  display: inline-flex; align-items: center; gap: 3px;
+  padding: 2px 7px; border-radius: 20px; font-size: 10.5px; font-weight: 700;
+}
+.badge-up   { background: rgba(74,222,128,.12); color: var(--up); }
+.badge-down { background: rgba(248,113,113,.12); color: var(--down); }
+.badge-neu  { background: rgba(96,165,250,.12);  color: var(--neutral); }
+.badge-warn { background: rgba(251,191,36,.12);  color: var(--warn); }
+.badge-acc  { background: var(--accent-dim);     color: var(--accent); }
+
+.grid4 { display: grid; grid-template-columns: repeat(4,1fr); gap: 14px; margin-bottom: 18px; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 18px; }
+.grid3 { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; margin-bottom: 18px; }
+
+/* ── BUTTONS ─────────────────────────────── */
+.btn { padding: 7px 15px; border-radius: 8px; font-size: 12.5px; font-weight: 600; border: none; transition: all .12s; }
+.btn-primary { background: var(--accent); color: #000; }
+.btn-primary:hover { background: #6de000; }
+.btn-primary:disabled { background: var(--surface3); color: var(--text-muted); cursor: not-allowed; }
+.btn-ghost { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+.btn-ghost:hover { border-color: var(--border2); }
+.btn-danger { background: rgba(248,113,113,.15); color: var(--down); border: 1px solid rgba(248,113,113,.25); }
+.btn-danger:hover { background: rgba(248,113,113,.25); }
+
+/* ── ORACLE PAGE ─────────────────────────── */
+.hermes-banner {
+  display: flex; align-items: center; gap: 14px;
+  padding: 13px 18px; border-radius: 10px; margin-bottom: 18px;
+  background: linear-gradient(135deg, rgba(127,255,0,.05), rgba(0,198,255,.05));
+  border: 1px solid rgba(127,255,0,.15);
+}
+.hb-icon { font-size: 22px; }
+.hb-text { flex: 1; }
+.hb-title { font-size: 13px; font-weight: 700; margin-bottom: 1px; }
+.hb-desc { font-size: 11.5px; color: var(--text-muted); }
+.hb-iter-block { text-align: center; }
+.hb-iter { font-size: 28px; font-weight: 900; color: var(--accent); font-family: var(--mono); line-height: 1; }
+.hb-iter-lbl { font-size: 9.5px; color: var(--text-muted); }
+
+.confusion-wrap { overflow-x: auto; }
+.confusion-grid { display: grid; grid-template-columns: 72px repeat(3,1fr); gap: 4px; font-size: 12px; min-width: 240px; }
+.cg-head { text-align: center; padding: 5px 0; color: var(--text-muted); font-size: 10.5px; font-weight: 600; }
+.cg-label { display: flex; align-items: center; color: var(--text-muted); font-size: 10.5px; font-weight: 600; }
+.cg-cell { border-radius: 7px; padding: 9px 4px; text-align: center; font-weight: 700; font-size: 16px; }
+.cg-diag { background: rgba(127,255,0,.1); color: var(--accent); }
+.cg-off  { background: rgba(255,255,255,.03); color: var(--text-muted); }
+.cg-axis { grid-column: 1/-1; text-align: center; font-size: 9.5px; color: var(--text-faint); margin-bottom: 1px; }
+
+.acc-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.acc-lbl { font-size: 11.5px; font-weight: 600; width: 60px; }
+.acc-bar-bg { flex: 1; height: 7px; background: var(--surface2); border-radius: 4px; overflow: hidden; }
+.acc-fill { height: 100%; border-radius: 4px; transition: width .7s ease; }
+.acc-pct { font-size: 11.5px; font-weight: 700; width: 40px; text-align: right; }
+.acc-n { font-size: 10.5px; color: var(--text-muted); width: 48px; text-align: right; }
+
+.stat3 { display: flex; gap: 18px; padding-top: 13px; border-top: 1px solid var(--border); margin-top: 14px; }
+.stat3-item .s-lbl { font-size: 10px; color: var(--text-muted); margin-bottom: 2px; }
+.stat3-item .s-val { font-size: 16px; font-weight: 800; }
+
+.param-list { display: flex; flex-direction: column; gap: 6px; }
+.param-row {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 7px 11px; background: var(--surface2); border-radius: 7px;
+}
+.p-name { font-size: 11.5px; color: var(--text-muted); }
+.p-val  { font-size: 11.5px; font-weight: 700; font-family: var(--mono); color: var(--accent2); }
+.p-tag  {
+  font-size: 9px; background: rgba(0,198,255,.1); border: 1px solid rgba(0,198,255,.2);
+  color: var(--accent2); border-radius: 3px; padding: 1px 4px; margin-left: 5px;
+}
+
+.chart-wrap { position: relative; height: 200px; }
+
+.iter-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.iter-table th {
+  text-align: left; padding: 7px 10px; color: var(--text-muted);
+  font-size: 10.5px; font-weight: 600; border-bottom: 1px solid var(--border);
+  text-transform: uppercase; letter-spacing: .4px;
+}
+.iter-table td { padding: 9px 10px; border-bottom: 1px solid rgba(42,47,69,.4); }
+.iter-table tr:hover td { background: var(--surface2); }
+.iter-table tr:last-child td { border-bottom: none; }
+.tag-acc { color: var(--up); font-weight: 700; font-size: 11px; }
+.tag-rej { color: var(--text-muted); font-size: 11px; }
+
+/* ── ELIGIBILITY GATE ───────────────────────── */
+.elig-badge {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 6px 16px; border-radius: 20px; font-size: 13px; font-weight: 800;
+  letter-spacing: .5px; margin-bottom: 16px;
+}
+.elig-badge.eligible   { background: rgba(74,222,128,.15); color: var(--up);      border: 1px solid rgba(74,222,128,.3); }
+.elig-badge.candidate  { background: rgba(255,180,50,.1);  color: #f5a623;         border: 1px solid rgba(255,180,50,.25); }
+.elig-badge.pending    { background: rgba(150,150,150,.1); color: var(--text-muted); border: 1px solid var(--border); }
+
+.elig-score { font-size: 12px; font-weight: 600; color: var(--text-muted); margin-bottom: 12px; }
+
+.elig-list { display: flex; flex-direction: column; gap: 5px; }
+.elig-row {
+  display: flex; align-items: center; gap: 9px;
+  padding: 8px 12px; border-radius: 7px; background: var(--surface2);
+}
+.elig-icon { font-size: 14px; flex-shrink: 0; width: 18px; text-align: center; }
+.elig-name { font-size: 11.5px; font-weight: 600; flex: 1; }
+.elig-val  { font-size: 11.5px; font-family: var(--mono); font-weight: 700; min-width: 48px; text-align: right; }
+.elig-thr  { font-size: 10.5px; color: var(--text-muted); min-width: 60px; text-align: right; }
+.elig-gap  { font-size: 10.5px; min-width: 56px; text-align: right; font-weight: 600; }
+.elig-row.pass { border-left: 2px solid var(--up); }
+.elig-row.fail { border-left: 2px solid var(--down); background: rgba(239,68,68,.05); }
+.elig-row.pending-row { border-left: 2px solid var(--border); opacity: 0.6; }
+
+/* ── STRATEGIES PAGE ─────────────────────── */
+.filter-tabs { display: flex; gap: 6px; margin-bottom: 18px; }
+.ftab {
+  padding: 6px 14px; border-radius: 20px; font-size: 12px; font-weight: 600;
+  border: 1px solid var(--border); background: transparent; color: var(--text-muted);
+  cursor: pointer; transition: all .12s;
+}
+.ftab.active, .ftab:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+
+.strat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; }
+.strat-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r); padding: 18px; cursor: pointer; transition: all .15s;
+}
+.strat-card:hover { border-color: var(--border2); transform: translateY(-1px); }
+.strat-card.selected { border-color: var(--accent); background: rgba(127,255,0,.03); }
+
+.sc-head { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; }
+.sc-name { font-size: 14px; font-weight: 700; margin-bottom: 3px; }
+.sc-date { font-size: 10.5px; color: var(--text-muted); }
+.status-badge {
+  font-size: 10px; font-weight: 700; padding: 3px 9px; border-radius: 20px;
+}
+.status-active  { background: rgba(74,222,128,.12);  color: var(--up);      border: 1px solid rgba(74,222,128,.25); }
+.status-paper   { background: rgba(96,165,250,.12);  color: var(--neutral); border: 1px solid rgba(96,165,250,.25); }
+.status-retired { background: rgba(106,112,148,.12); color: var(--text-muted); border: 1px solid var(--border); }
+
+.sc-metrics { display: grid; grid-template-columns: repeat(3,1fr); gap: 8px; margin-bottom: 12px; }
+.sc-metric { background: var(--surface2); border-radius: 8px; padding: 8px 10px; text-align: center; }
+.sc-metric .m-val { font-size: 15px; font-weight: 800; }
+.sc-metric .m-lbl { font-size: 9.5px; color: var(--text-muted); margin-top: 1px; }
+.sc-mini-bars { display: flex; flex-direction: column; gap: 5px; }
+.mini-bar-row { display: flex; align-items: center; gap: 6px; font-size: 10.5px; }
+.mini-lbl { width: 54px; color: var(--text-muted); }
+.mini-bg { flex: 1; height: 5px; background: var(--surface2); border-radius: 3px; overflow: hidden; }
+.mini-fill { height: 100%; border-radius: 3px; }
+.mini-pct { width: 36px; text-align: right; font-weight: 700; }
+
+.detail-panel {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r); padding: 22px; margin-top: 18px; display: none;
+}
+.detail-panel.open { display: block; }
+.dp-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+.dp-title { font-size: 15px; font-weight: 700; }
+.dp-close { background: none; border: none; color: var(--text-muted); font-size: 18px; cursor: pointer; padding: 2px 6px; }
+.dp-close:hover { color: var(--text); }
+.dp-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
+.dp-chart-wrap { position: relative; height: 160px; }
+
+/* ── HERMES PAGE ──────────────────────────── */
+.hermes-layout { display: grid; grid-template-columns: 1fr 360px; gap: 16px; height: calc(100vh - 54px - 48px); }
+
+.chat-panel {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r); display: flex; flex-direction: column; overflow: hidden;
+}
+.chat-header {
+  padding: 14px 18px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 10px; flex-shrink: 0;
+}
+.chat-header-icon { font-size: 20px; }
+.chat-header-title { font-size: 13.5px; font-weight: 700; }
+.chat-header-sub { font-size: 11px; color: var(--text-muted); }
+
+.chat-messages { flex: 1; overflow-y: auto; padding: 16px 18px; display: flex; flex-direction: column; gap: 14px; }
+.msg { display: flex; gap: 10px; max-width: 100%; }
+.msg-user { flex-direction: row-reverse; }
+.msg-avatar {
+  width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center; font-size: 14px;
+}
+.avatar-oracle { background: linear-gradient(135deg, var(--accent), #00ffaa); color: #000; font-weight: 900; }
+.avatar-user   { background: var(--surface3); }
+.msg-bubble {
+  max-width: 82%; padding: 10px 13px; border-radius: 12px;
+  font-size: 12.5px; line-height: 1.55;
+}
+.bubble-oracle { background: var(--surface2); border: 1px solid var(--border); border-bottom-left-radius: 3px; }
+.bubble-user   { background: var(--accent-dim); border: 1px solid rgba(127,255,0,.2); border-bottom-right-radius: 3px; color: var(--text); }
+.msg-time { font-size: 9.5px; color: var(--text-faint); margin-top: 3px; }
+.msg-user .msg-time { text-align: right; }
+
+.chat-result {
+  background: var(--surface3); border-radius: 8px;
+  padding: 10px 12px; margin-top: 8px; font-family: var(--mono); font-size: 11px;
+  border-left: 3px solid var(--accent);
+}
+.chat-result .cr-label { color: var(--text-muted); font-size: 10px; margin-bottom: 4px; text-transform: uppercase; letter-spacing: .5px; }
+.cr-row { display: flex; justify-content: space-between; margin-bottom: 2px; }
+.cr-key { color: var(--text-muted); }
+.cr-val { font-weight: 700; }
+
+.chat-input-area {
+  padding: 12px 14px; border-top: 1px solid var(--border); flex-shrink: 0;
+  display: flex; gap: 8px; align-items: flex-end;
+}
+.chat-input {
+  flex: 1; background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 10px; padding: 9px 12px; color: var(--text); font-family: var(--font);
+  font-size: 12.5px; resize: none; line-height: 1.45; max-height: 100px; overflow-y: auto;
+  outline: none; transition: border-color .15s;
+}
+.chat-input:focus { border-color: var(--border2); }
+.chat-input::placeholder { color: var(--text-faint); }
+.chat-send {
+  width: 36px; height: 36px; background: var(--accent); border: none;
+  border-radius: 8px; color: #000; font-size: 15px; display: flex;
+  align-items: center; justify-content: center; flex-shrink: 0;
+}
+.chat-send:hover { background: #6de000; }
+
+.run-panel {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r); padding: 18px; display: flex; flex-direction: column; gap: 14px;
+  overflow-y: auto;
+}
+.rp-title { font-size: 13.5px; font-weight: 700; margin-bottom: 2px; }
+.rp-sub { font-size: 11px; color: var(--text-muted); }
+.rp-divider { border: none; border-top: 1px solid var(--border); }
+
+.rp-field { display: flex; flex-direction: column; gap: 5px; }
+.rp-label { font-size: 11px; color: var(--text-muted); font-weight: 600; }
+.rp-input {
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 7px; padding: 7px 10px; color: var(--text);
+  font-size: 12.5px; font-family: var(--font); outline: none;
+}
+.rp-input:focus { border-color: var(--border2); }
+select.rp-input option { background: var(--surface2); }
+
+.lock-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+.lock-item {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 8px; background: var(--surface2); border-radius: 6px; cursor: pointer;
+}
+.lock-item input[type=checkbox] { accent-color: var(--accent); width: 12px; height: 12px; }
+.lock-item label { font-size: 11px; color: var(--text-muted); cursor: pointer; font-family: var(--mono); }
+.lock-item.locked label { color: var(--text-faint); text-decoration: line-through; }
+
+.run-status {
+  padding: 10px 12px; border-radius: 8px; font-size: 11.5px;
+  background: var(--surface2); border: 1px solid var(--border);
+}
+.rs-row { display: flex; justify-content: space-between; margin-bottom: 3px; font-size: 11px; }
+.rs-row:last-child { margin-bottom: 0; }
+.rs-key { color: var(--text-muted); }
+.rs-val { font-weight: 700; font-family: var(--mono); }
+
+.progress-bar-wrap { background: var(--surface2); border-radius: 4px; height: 5px; overflow: hidden; margin-top: 6px; }
+.progress-bar { height: 100%; background: var(--accent); border-radius: 4px; transition: width .4s; }
+
+/* ── SCROLLBAR ────────────────────────────── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+/* ── TYPING DOTS ────────────────────────────── */
+.typing-dots span {
+  display: inline-block; width: 6px; height: 6px; background: var(--text-muted);
+  border-radius: 50%; animation: tdot .8s infinite;
+}
+.typing-dots span:nth-child(2) { animation-delay: .15s; }
+.typing-dots span:nth-child(3) { animation-delay: .3s; }
+@keyframes tdot { 0%,60%,100%{transform:translateY(0)} 30%{transform:translateY(-5px)} }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════ SIDEBAR ═══════════════════ -->
+<nav class="sidebar">
+  <div class="logo">
+    <div class="logo-icon">∞</div>
+    <div>
+      <div class="logo-name">InfiniteLoop</div>
+      <div class="logo-sub">0DTE SPX SYSTEM</div>
+    </div>
+  </div>
+
+  <div class="nav-label">Agents</div>
+  <div class="nav-item active" data-page="oracle" onclick="nav(this)">
+    <span class="ni">🔮</span> Oracle
+  </div>
+  <div class="nav-item" data-page="hermes" onclick="nav(this)">
+    <span class="ni">🧠</span> Hermes Chat
+  </div>
+
+  <div class="nav-label">Performance</div>
+  <div class="nav-item" data-page="strategies" onclick="nav(this)">
+    <span class="ni">🧬</span> Strategies
+  </div>
+  <div class="nav-item" style="opacity:.4;cursor:not-allowed">
+    <span class="ni">📊</span> Portfolio <span class="soon">Soon</span>
+  </div>
+  <div class="nav-item" style="opacity:.4;cursor:not-allowed">
+    <span class="ni">📋</span> Trade Log <span class="soon">Soon</span>
+  </div>
+
+  <div class="sidebar-spacer"></div>
+  <div class="sidebar-footer">
+    <div class="agent-pill">
+      <div class="agent-dot"></div>
+      <div>
+        <div class="agent-name">Oracle</div>
+        <div class="agent-status">Idle · v1</div>
+      </div>
+    </div>
+    <div class="equity-row">
+      <div class="equity-label">Account Equity</div>
+      <div class="equity-val">$5,000</div>
+    </div>
+  </div>
+</nav>
+
+<!-- ═══════════════════ MAIN ═══════════════════ -->
+<div class="main">
+  <div class="topbar">
+    <div class="topbar-left">
+      <div class="page-crumb" id="crumb">Agents → <span>Oracle</span></div>
+    </div>
+    <div class="topbar-right">
+      <div class="market-pill" id="chipDb" title="Where Oracle iteration history is persisted">DB: …</div>
+      <div class="market-pill" id="chipHermes" title="Ollama / Hermes 3 availability">Hermes: …</div>
+      <div class="market-pill" style="color:var(--text-muted)">Paper Mode</div>
+    </div>
+  </div>
+
+  <div class="content">
+
+    <!-- ═══════ ORACLE PAGE ═══════ -->
+    <div class="page active" id="page-oracle">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px">
+        <div>
+          <div style="font-size:20px;font-weight:800;margin-bottom:3px">🔮 Oracle</div>
+          <div style="font-size:12px;color:var(--text-muted)">Direction classifier — UP / DOWN / NEUTRAL. NEUTRAL = within VIX-derived expected move.</div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-ghost" onclick="oracleRefresh()">↻ Refresh</button>
+          <button class="btn btn-ghost" onclick="window.location='/api/oracle/report'" title="Download full status report (markdown): params, IS/OOS, eligibility, walk-forward, daily signals">⬇ Report</button>
+          <button class="btn btn-primary" id="oracleSweepBtn" onclick="runOracleSweep()" title="Optuna TPE sweep over all thresholds — hundreds of backtests, no LLM needed">⚡ Run Sweep</button>
+          <button class="btn btn-ghost" id="oracleRunBtn" onclick="runOracleLoop()">▶ Hermes Loop</button>
+        </div>
+      </div>
+
+      <!-- Hermes banner -->
+      <div class="hermes-banner">
+        <div class="hb-icon">🧠</div>
+        <div class="hb-text">
+          <div class="hb-title" id="hbTitle">Hermes Idle</div>
+          <div class="hb-desc" id="hbDesc">Run the Hermes loop to begin optimizing Oracle's direction thresholds.</div>
+        </div>
+        <div class="hb-iter-block">
+          <div class="hb-iter" id="hbIter">0</div>
+          <div class="hb-iter-lbl">iterations</div>
+        </div>
+      </div>
+
+      <!-- Metric cards -->
+      <div class="grid4">
+        <div class="card">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <div class="metric-label">Overall Accuracy</div><span style="font-size:18px">🎯</span>
+          </div>
+          <div class="metric-val" id="oAcc">58.7%</div>
+          <div class="metric-label" id="oAccSub">478 active days</div>
+        </div>
+        <div class="card">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <div class="metric-label">UP Accuracy</div><span style="font-size:18px;color:var(--up)">↑</span>
+          </div>
+          <div class="metric-val" style="color:var(--up)" id="upAcc">63.1%</div>
+          <div class="metric-label">189 UP days</div>
+        </div>
+        <div class="card">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <div class="metric-label">DOWN Accuracy</div><span style="font-size:18px;color:var(--down)">↓</span>
+          </div>
+          <div class="metric-val" style="color:var(--down)" id="downAcc">55.4%</div>
+          <div class="metric-label">157 DOWN days</div>
+        </div>
+        <div class="card">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <div class="metric-label">NEUTRAL Accuracy</div><span style="font-size:18px;color:var(--neutral)">↔</span>
+          </div>
+          <div class="metric-val" style="color:var(--neutral)" id="neuAcc">57.2%</div>
+          <div class="metric-label">132 NEUTRAL days</div>
+        </div>
+      </div>
+
+      <!-- Confusion + Accuracy Bars -->
+      <div class="grid2">
+        <div class="card">
+          <div class="card-header">
+            <div><div class="card-title">Confusion Matrix</div><div class="card-sub">Rows = actual · Columns = predicted</div></div>
+            <div id="confUpdateTag" style="font-size:10px;color:var(--text-muted)">not yet updated</div>
+          </div>
+          <div class="confusion-wrap">
+            <div class="confusion-grid" id="confGrid">
+              <div></div>
+              <div class="cg-head" style="color:var(--up)">UP</div>
+              <div class="cg-head" style="color:var(--down)">DOWN</div>
+              <div class="cg-head" style="color:var(--neutral)">NEU</div>
+              <div class="cg-axis">← Predicted →</div>
+              <div class="cg-label" style="color:var(--up)">UP</div>
+              <div class="cg-cell cg-diag" id="cUU">119</div><div class="cg-cell cg-off" id="cUD">32</div><div class="cg-cell cg-off" id="cUN">38</div>
+              <div class="cg-label" style="color:var(--down)">DOWN</div>
+              <div class="cg-cell cg-off" id="cDU">28</div><div class="cg-cell cg-diag" id="cDD">87</div><div class="cg-cell cg-off" id="cDN">42</div>
+              <div class="cg-label" style="color:var(--neutral)">NEU</div>
+              <div class="cg-cell cg-off" id="cNU">22</div><div class="cg-cell cg-off" id="cND">34</div><div class="cg-cell cg-diag" id="cNN">76</div>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <div><div class="card-title">Per-Class Accuracy</div></div>
+          </div>
+          <div>
+            <div class="acc-row">
+              <div class="acc-lbl" style="color:var(--up)">UP</div>
+              <div class="acc-bar-bg"><div class="acc-fill" id="barUp" style="width:63.1%;background:var(--up)"></div></div>
+              <div class="acc-pct" style="color:var(--up)" id="pctUp">63.1%</div>
+              <div class="acc-n">189 days</div>
+            </div>
+            <div class="acc-row">
+              <div class="acc-lbl" style="color:var(--down)">DOWN</div>
+              <div class="acc-bar-bg"><div class="acc-fill" id="barDown" style="width:55.4%;background:var(--down)"></div></div>
+              <div class="acc-pct" style="color:var(--down)" id="pctDown">55.4%</div>
+              <div class="acc-n">157 days</div>
+            </div>
+            <div class="acc-row">
+              <div class="acc-lbl" style="color:var(--neutral)">NEUTRAL</div>
+              <div class="acc-bar-bg"><div class="acc-fill" id="barNeu" style="width:57.2%;background:var(--neutral)"></div></div>
+              <div class="acc-pct" style="color:var(--neutral)" id="pctNeu">57.2%</div>
+              <div class="acc-n">132 days</div>
+            </div>
+          </div>
+          <div class="stat3">
+            <div class="stat3-item"><div class="s-lbl">Skip Rate</div><div class="s-val" style="color:var(--skip)">4.3%</div></div>
+            <div class="stat3-item"><div class="s-lbl">Active Days</div><div class="s-val">478</div></div>
+            <div class="stat3-item"><div class="s-lbl">Total Days</div><div class="s-val">500</div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Chart + Params -->
+      <div class="grid3">
+        <div class="card">
+          <div class="card-header"><div class="card-title">Accuracy History</div><div class="card-action">per iteration</div></div>
+          <div class="chart-wrap"><canvas id="oracleChart"></canvas></div>
+        </div>
+        <div class="card">
+          <div class="card-header"><div class="card-title">Current Parameters</div></div>
+          <div class="param-list" id="oParamList"></div>
+        </div>
+      </div>
+
+      <!-- Iteration Log -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">Hermes Iteration Log</div>
+          <div class="card-action" onclick="clearIterLog()">Clear</div>
+        </div>
+        <div style="overflow-x:auto">
+          <table class="iter-table">
+            <thead><tr>
+              <th>#</th><th>Parameter</th><th>Old</th><th>New</th>
+              <th>Accuracy</th><th>UP</th><th>DOWN</th><th>NEUTRAL</th>
+              <th>Status</th><th>Reasoning</th>
+            </tr></thead>
+            <tbody id="iterBody">
+              <tr><td colspan="10" style="text-align:center;color:var(--text-muted);padding:22px">No iterations yet</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Eligibility Gate -->
+      <div class="card" id="eligCard">
+        <div class="card-header">
+          <div class="card-title">🎯 Oracle Eligibility Gate</div>
+          <div class="card-action" id="eligRefreshBtn" onclick="refreshEligibility()" title="Re-evaluate eligibility">↻ Check</div>
+        </div>
+        <div id="eligContent">
+          <div id="eligBadge" class="elig-badge pending">⏳ NOT EVALUATED</div>
+          <div id="eligScore" class="elig-score">Run a backtest first, then click ↻ Check</div>
+          <div class="elig-list" id="eligList"></div>
+        </div>
+      </div>
+
+      <!-- Walk-Forward Validation -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">📐 Walk-Forward Validation</div>
+          <button class="btn btn-primary" id="wfBtn" onclick="runWalkForward()" style="font-size:11.5px;padding:6px 14px">▶ Run (6 folds)</button>
+        </div>
+        <div id="wfSummary" style="font-size:12px;color:var(--text-muted);margin-bottom:10px">
+          Evaluates current params across consecutive time windows over the full history.
+          One 80/20 split is one noisy sample — this shows whether the edge is stable across regimes.
+        </div>
+        <div style="overflow-x:auto">
+          <table class="iter-table">
+            <thead><tr>
+              <th>Fold</th><th>Period</th><th>Days</th><th>Active</th><th>Skip</th>
+              <th>Accuracy</th><th>Macro</th><th>UP</th><th>DOWN</th><th>NEUTRAL</th>
+            </tr></thead>
+            <tbody id="wfBody">
+              <tr><td colspan="10" style="text-align:center;color:var(--text-muted);padding:18px">Not run yet</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Daily Signals (confidence per day — trade agent input) -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">📅 Daily Signals — OOS</div>
+          <button class="btn btn-primary" id="dsBtn" onclick="loadDailySignals()" style="font-size:11.5px;padding:6px 14px">▶ Load</button>
+        </div>
+        <div id="dsSummary" style="font-size:12px;color:var(--text-muted);margin-bottom:10px">
+          Per-day call with confidence and per-class scores. The confidence column is the
+          trade agent's primary input: accuracy by confidence bucket appears above the table after loading.
+        </div>
+        <div id="dsBuckets" style="font-size:12px;margin-bottom:8px"></div>
+        <div style="overflow-x:auto;max-height:420px;overflow-y:auto">
+          <table class="iter-table">
+            <thead><tr>
+              <th>Date</th><th>Call</th><th>Actual</th><th>✓</th><th>Conf</th>
+              <th>UP</th><th>DOWN</th><th>NEU</th><th>Lean</th><th>Skip Reason</th>
+            </tr></thead>
+            <tbody id="dsBody">
+              <tr><td colspan="10" style="text-align:center;color:var(--text-muted);padding:18px">Not loaded yet</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Trade Agent — Policy Race -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">💰 Trade Agent — Policy Race</div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <select id="prWindow" style="background:var(--surface2);color:var(--text);border:1px solid var(--border1);border-radius:5px;font-size:11px;padding:5px 8px">
+              <option value="oos">OOS (locked 20%)</option>
+              <option value="full">Full history</option>
+            </select>
+            <button class="btn btn-primary" id="prBtn" onclick="runPolicyRace()" style="font-size:11.5px;padding:6px 14px">▶ Race</button>
+          </div>
+        </div>
+        <div id="prSummary" style="font-size:12px;color:var(--text-muted);margin-bottom:10px">
+          Same days, same params, two policies: <strong>directional_only</strong> trades only Oracle's UP/DOWN calls;
+          <strong>always_in</strong> adds iron condors on ambiguous days (trade ~every day). $5,000 start, hard risk rules enforced.
+        </div>
+        <div style="overflow-x:auto">
+          <table class="iter-table">
+            <thead><tr>
+              <th>Policy</th><th>Trades</th><th>Win%</th><th>Expectancy</th><th>PF</th>
+              <th>Sharpe</th><th>Max DD</th><th>Final Equity</th><th>Return</th><th>By Type</th>
+            </tr></thead>
+            <tbody id="prBody">
+              <tr><td colspan="10" style="text-align:center;color:var(--text-muted);padding:18px">Not run yet</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div id="prDebug" style="font-size:10.5px;color:var(--text-muted);margin-top:8px;padding:6px 8px;background:var(--surface2);border-radius:5px;display:none"></div>
+        <div class="chart-wrap" style="margin-top:12px;height:220px"><canvas id="prChart"></canvas></div>
+      </div>
+
+    </div><!-- /oracle page -->
+
+    <!-- ═══════ STRATEGIES PAGE ═══════ -->
+    <div class="page" id="page-strategies">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+        <div>
+          <div style="font-size:20px;font-weight:800;margin-bottom:3px">🧬 Strategies</div>
+          <div style="font-size:12px;color:var(--text-muted)">All Oracle strategy versions and their backtest results.</div>
+        </div>
+      </div>
+
+      <div class="filter-tabs">
+        <button class="ftab active" onclick="filterStrats('all',this)">All</button>
+        <button class="ftab" onclick="filterStrats('active',this)">Active</button>
+        <button class="ftab" onclick="filterStrats('paper',this)">Paper</button>
+        <button class="ftab" onclick="filterStrats('retired',this)">Retired</button>
+      </div>
+
+      <div class="strat-grid" id="stratGrid"></div>
+
+      <!-- Detail panel -->
+      <div class="detail-panel" id="detailPanel">
+        <div class="dp-head">
+          <div class="dp-title" id="dpTitle">Strategy Detail</div>
+          <button class="dp-close" onclick="closeDetail()">✕</button>
+        </div>
+        <div class="dp-grid" id="dpGrid"></div>
+      </div>
+    </div><!-- /strategies page -->
+
+    <!-- ═══════ HERMES CHAT PAGE ═══════ -->
+    <div class="page" id="page-hermes">
+      <div style="margin-bottom:16px">
+        <div style="font-size:20px;font-weight:800;margin-bottom:3px">🧠 Hermes Chat</div>
+        <div style="font-size:12px;color:var(--text-muted)">Talk to Oracle's Hermes agent. Ask it to run loops, explain decisions, or focus on specific direction classes.</div>
+      </div>
+      <div class="hermes-layout">
+
+        <!-- Chat -->
+        <div class="chat-panel">
+          <div class="chat-header">
+            <div class="chat-header-icon">🔮</div>
+            <div>
+              <div class="chat-header-title">Oracle · Hermes 3</div>
+              <div class="chat-header-sub">Direction optimization agent — responds with accuracy metrics</div>
+            </div>
+            <div style="margin-left:auto;display:flex;align-items:center;gap:10px">
+              <div style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--up)">
+                <div class="agent-dot" style="background:var(--up)"></div> Ready
+              </div>
+              <button onclick="clearChatHistory()" title="Clear conversation history" style="background:none;border:1px solid var(--border1);color:var(--text-muted);font-size:10px;padding:3px 7px;border-radius:4px;cursor:pointer;line-height:1">Clear</button>
+            </div>
+          </div>
+          <div class="chat-messages" id="chatMessages">
+            <div class="msg">
+              <div class="msg-avatar avatar-oracle">O</div>
+              <div>
+                <div class="msg-bubble bubble-oracle">
+                  Hi Kirk. I'm Oracle — your 0DTE direction classifier. I classify each SPX trading day as <strong style="color:var(--up)">UP</strong>, <strong style="color:var(--down)">DOWN</strong>, or <strong style="color:var(--neutral)">NEUTRAL</strong> before the trade entry window.<br><br>
+                  I'm currently at <strong style="color:var(--accent)">58.7%</strong> overall accuracy on 478 trading days. Tell me what you'd like to work on — I can run optimization loops, explain my current logic, or focus on improving accuracy for a specific direction class.
+                </div>
+                <div class="msg-time">Oracle · just now</div>
+              </div>
+            </div>
+          </div>
+          <div class="chat-input-area">
+            <textarea class="chat-input" id="chatInput" placeholder="Ask Oracle anything, or suggest a change… e.g. 'try gap_threshold_pct at 0.003' or 'why is DOWN accuracy low?'" rows="1"
+              onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendChat()}"></textarea>
+            <button class="chat-send" onclick="sendChat()">↑</button>
+          </div>
+        </div>
+
+        <!-- Run Panel -->
+        <div class="run-panel">
+          <div>
+            <div class="rp-title">Loop Controls</div>
+            <div class="rp-sub">Configure and launch Oracle's Hermes optimization loop.</div>
+          </div>
+          <hr class="rp-divider">
+
+          <div class="rp-field">
+            <div class="rp-label">Iterations</div>
+            <input class="rp-input" type="number" id="rpIter" value="20" min="1" max="100">
+          </div>
+
+          <div class="rp-field">
+            <div class="rp-label">Optimize For</div>
+            <select class="rp-input" id="rpTarget">
+              <option value="overall">Overall Accuracy</option>
+              <option value="up">UP Accuracy</option>
+              <option value="down">DOWN Accuracy</option>
+              <option value="neutral">NEUTRAL Accuracy</option>
+            </select>
+          </div>
+
+          <div class="rp-field">
+            <div class="rp-label">Data Window</div>
+            <select class="rp-input" id="rpWindow">
+              <option value="all">All available (IS only)</option>
+              <option value="2y">Last 2 years</option>
+              <option value="1y">Last 1 year</option>
+            </select>
+          </div>
+
+          <div class="rp-field">
+            <div class="rp-label">Lock Parameters (Hermes won't touch these)</div>
+            <div class="lock-grid" id="lockGrid"></div>
+          </div>
+
+          <hr class="rp-divider">
+
+          <div class="run-status" id="runStatus">
+            <div class="rs-row"><span class="rs-key">Status</span><span class="rs-val" id="rsStatus">Idle</span></div>
+            <div class="rs-row"><span class="rs-key">Iterations done</span><span class="rs-val" id="rsIter">0 / 0</span></div>
+            <div class="rs-row"><span class="rs-key">Best accuracy</span><span class="rs-val" id="rsBest">58.7%</span></div>
+            <div class="rs-row"><span class="rs-key">Last change</span><span class="rs-val" id="rsLast">—</span></div>
+            <div class="progress-bar-wrap"><div class="progress-bar" id="progressBar" style="width:0%"></div></div>
+          </div>
+
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-primary" style="flex:1" id="rpRunBtn" onclick="rpRun()">▶ Start Loop</button>
+            <button class="btn btn-danger" id="rpStopBtn" onclick="rpStop()" disabled>■ Stop</button>
+            <button class="btn btn-ghost" id="rpResetBtn" onclick="rpReset()" title="Force-clear stuck loop state after a page refresh" style="font-size:11px">↺ Reset</button>
+          </div>
+
+          <hr class="rp-divider">
+          <div>
+            <div class="rp-label" style="margin-bottom:8px">OOS Validation</div>
+            <button class="btn btn-ghost" style="width:100%;font-size:11.5px" onclick="runOOS()">Run Out-of-Sample Test</button>
+            <div style="font-size:10.5px;color:var(--text-muted);margin-top:5px">Uses the locked 20% of data Oracle has never seen during optimization.</div>
+          </div>
+        </div>
+
+      </div>
+    </div><!-- /hermes page -->
+
+  </div><!-- /content -->
+</div><!-- /main -->
+
+<script>
+// ═══════════════════════════════════════════════════════
+// BACKEND CONNECTION
+// ═══════════════════════════════════════════════════════
+const API = '';   // relative — same host/port as the page
+let WS = null;
+let wsReconnectTimer = null;
+
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const url = `${proto}://${location.host}/ws`;
+  WS = new WebSocket(url);
+
+  WS.onopen = () => {
+    console.log('[WS] connected');
+    clearTimeout(wsReconnectTimer);
+    updateConnectionBadge(true);
+  };
+
+  WS.onmessage = (evt) => {
+    try { handleWSMessage(JSON.parse(evt.data)); }
+    catch(e) { console.error('[WS] parse error', e); }
+  };
+
+  WS.onclose = () => {
+    updateConnectionBadge(false);
+    wsReconnectTimer = setTimeout(connectWS, 3000);
+  };
+
+  WS.onerror = () => { WS.close(); };
+}
+
+function updateConnectionBadge(connected) {
+  const dot = document.querySelector('.agent-dot');
+  const status = document.querySelector('.agent-status');
+  if (dot) dot.style.background = connected ? 'var(--up)' : 'var(--down)';
+  if (status) status.textContent = connected ? 'Connected' : 'Reconnecting…';
+}
+
+function handleWSMessage(msg) {
+  switch(msg.type) {
+    case 'state':         applyServerState(msg.data); break;
+    case 'iteration':     onIteration(msg.data); break;
+    case 'loop_started':  onLoopStarted(msg.data); break;
+    case 'loop_complete': onLoopComplete(msg.data); break;
+    case 'loop_stopped':  onLoopStopped(); break;
+    case 'loop_error':    onLoopError(msg.data.error); break;
+  }
+}
+
+// Single source of truth for loop running state — updates every button on both tabs
+function setLoopState(running) {
+  loopRunning = running;
+  const runBtn   = document.getElementById('oracleRunBtn');
+  const sweepBtn = document.getElementById('oracleSweepBtn');
+  const rpRun    = document.getElementById('rpRunBtn');
+  const rpStop   = document.getElementById('rpStopBtn');
+  const rsStatus = document.getElementById('rsStatus');
+  if (sweepBtn) sweepBtn.disabled = running;
+  if (running) {
+    if (runBtn)   { runBtn.textContent = '⏸ Running…'; runBtn.disabled = true; }
+    if (rpRun)    rpRun.disabled = true;
+    if (rpStop)   rpStop.disabled = false;
+    if (rsStatus) { rsStatus.textContent = 'Running'; rsStatus.style.color = 'var(--up)'; }
+  } else {
+    if (runBtn)   { runBtn.textContent = '▶ Hermes Loop'; runBtn.disabled = false; }
+    if (rpRun)    rpRun.disabled = false;
+    if (rpStop)   rpStop.disabled = true;
+    if (rsStatus && rsStatus.textContent === 'Running') {
+      rsStatus.textContent = 'Idle'; rsStatus.style.color = '';
+    }
+  }
+}
+
+function applyServerState(data) {
+  if (data.params) Object.assign(ORACLE_PARAMS, data.params);
+  if (data.iter_history) {
+    data.iter_history.forEach(r => {
+      if (!ITER_HISTORY.find(h => h.n === r.n)) ITER_HISTORY.push(r);
+    });
+    ITER_HISTORY.sort((a,b) => a.n - b.n);
+  }
+  if (data.accuracy && data.accuracy.overall != null) {
+    const a = data.accuracy;
+    updateAccuracyDisplay(a.overall, a.up, a.down, a.neutral);
+  }
+  if (data.confusion) updateConfusionMatrix(data.confusion);
+
+  // Sync loop running state — critical after page refresh
+  if (data.loop_running != null) {
+    setLoopState(data.loop_running);
+    // Also update banner text on reconnect (onLoopStarted only fires on the live WS message)
+    if (data.loop_running) {
+      document.getElementById('hbTitle').textContent = 'Hermes Optimizing Oracle…';
+      document.getElementById('hbDesc').textContent = 'Testing direction threshold variations — one parameter at a time.';
+      if (data.iter_count != null) document.getElementById('hbIter').textContent = data.iter_count;
+    }
+  }
+
+  // Status bar
+  const ready = data.ready;
+  const banner = document.getElementById('startupBanner');
+  if (banner) banner.style.display = ready ? 'none' : 'flex';
+  if (!ready && data.startup_error) {
+    if (banner) banner.querySelector('span').textContent = '⚠ ' + data.startup_error;
+  }
+
+  renderOracleParams();
+  renderIterLog();
+  // Rebuild chart from history
+  if (ITER_HISTORY.length > 0 && oChart) {
+    oChartData.labels   = ITER_HISTORY.map(r => r.n);
+    oChartData.overall  = ITER_HISTORY.map(r => r.acc);
+    oChartData.up       = ITER_HISTORY.map(r => r.up);
+    oChartData.down     = ITER_HISTORY.map(r => r.dn);
+    oChartData.neutral  = ITER_HISTORY.map(r => r.neu);
+    oChart.data.labels = oChartData.labels;
+    ['overall','up','down','neutral'].forEach((k,i) => { oChart.data.datasets[i].data = oChartData[k]; });
+    oChart.update('none');
+  }
+}
+
+function onIteration(data) {
+  const r = data.record;
+  // r.n is a GLOBAL sequence number (unique across runs and sessions);
+  // r.run_iter is the iteration number within the current run.
+  if (!ITER_HISTORY.find(h => h.n === r.n)) ITER_HISTORY.push(r);
+  RUN_DONE++;
+
+  // Always update best-strategy stats — server always sends best, not candidate
+  if (r.ok) {
+    Object.assign(ORACLE_PARAMS, data.params);
+    renderOracleParams();
+  }
+  updateAccuracyDisplay(data.accuracy.overall, data.accuracy.up, data.accuracy.down, data.accuracy.neutral);
+  if (data.confusion) updateConfusionMatrix(data.confusion);
+
+  oChartData.labels.push(r.n);
+  oChartData.overall.push(r.acc);
+  oChartData.up.push(r.up);
+  oChartData.down.push(r.dn);
+  oChartData.neutral.push(r.neu);
+  oChart.data.labels = oChartData.labels;
+  ['overall','up','down','neutral'].forEach((k,i) => { oChart.data.datasets[i].data = oChartData[k]; });
+  oChart.update('none');
+
+  document.getElementById('hbIter').textContent = r.run_iter ?? r.n;
+  renderIterLog();
+
+  // Mirror to Hermes run panel progress — per-run count, NOT total history
+  const total = parseInt(document.getElementById('rpIter')?.value) || 20;
+  const done = RUN_DONE;
+  const prog = document.getElementById('progressBar');
+  if (prog) prog.style.width = Math.min(100,(done/total*100)).toFixed(0)+'%';
+  const rsIter = document.getElementById('rsIter');
+  if (rsIter) rsIter.textContent = `${done} / ${total}`;
+  const rsLast = document.getElementById('rsLast');
+  if (rsLast) rsLast.textContent = r.p;
+  const rsBest = document.getElementById('rsBest');
+  if (rsBest) rsBest.textContent = pct(data.accuracy.overall);
+
+  // Auto-refresh eligibility every 5 iterations
+  if (RUN_DONE % 5 === 0) refreshEligibility();
+}
+
+function onLoopStarted(data) {
+  setLoopState(true);
+  RUN_DONE = 0;
+  const prog = document.getElementById('progressBar');
+  if (prog) prog.style.width = '0%';
+  document.getElementById('hbTitle').textContent = 'Hermes Optimizing Oracle…';
+  document.getElementById('hbDesc').textContent = 'Testing direction threshold variations — one parameter at a time.';
+}
+
+function onLoopComplete(data) {
+  setLoopState(false);
+  Object.assign(ORACLE_PARAMS, data.params);
+  renderOracleParams();
+  updateAccuracyDisplay(data.accuracy.overall, data.accuracy.up, data.accuracy.down, data.accuracy.neutral);
+  document.getElementById('hbTitle').textContent = data.mode === 'sweep' ? 'Sweep Complete' : 'Hermes Converged';
+  let desc = `${data.accepted_count} improvements accepted over ${data.total_iterations} iterations. Run OOS validation to confirm.`;
+  if (data.param_importances && Object.keys(data.param_importances).length) {
+    const top = Object.entries(data.param_importances).sort((a,b)=>b[1]-a[1]).slice(0,3)
+      .map(([k,v])=>`${k} (${(v*100).toFixed(0)}%)`).join(', ');
+    desc += ` Most influential params: ${top}.`;
+  }
+  document.getElementById('hbDesc').textContent = desc;
+  document.getElementById('rsStatus').textContent = 'Complete';
+  document.getElementById('rsStatus').style.color = 'var(--accent)';
+  const prog = document.getElementById('progressBar');
+  if (prog) prog.style.width = '100%';
+  // Always refresh eligibility when loop completes
+  refreshEligibility();
+}
+
+function onLoopStopped() {
+  setLoopState(false);
+  document.getElementById('rsStatus').textContent = 'Stopped';
+  document.getElementById('rsStatus').style.color = 'var(--text-muted)';
+  document.getElementById('rpRunBtn').disabled = false;
+  document.getElementById('rpStopBtn').disabled = true;
+}
+
+function onLoopError(error) {
+  setLoopState(false);
+  document.getElementById('hbTitle').textContent = 'Error';
+  document.getElementById('hbDesc').textContent = error;
+  document.getElementById('rsStatus').textContent = 'Error';
+  document.getElementById('rsStatus').style.color = 'var(--down)';
+  document.getElementById('rpRunBtn').disabled = false;
+  document.getElementById('rpStopBtn').disabled = true;
+  console.error('[Oracle loop error]', error);
+}
+
+function updateAccuracyDisplay(overall, up, down, neutral) {
+  const el = id => document.getElementById(id);
+  if (el('oAcc'))   el('oAcc').textContent   = pct(overall);
+  if (el('upAcc'))  el('upAcc').textContent   = pct(up);
+  if (el('downAcc')) el('downAcc').textContent = pct(down);
+  if (el('neuAcc')) el('neuAcc').textContent  = pct(neutral);
+  const bars = [['barUp',up],['barDown',down],['barNeu',neutral]];
+  bars.forEach(([id,v]) => { const b = el(id); if(b) b.style.width=(v*100).toFixed(1)+'%'; });
+  const pcts = [['pctUp',up],['pctDown',down],['pctNeu',neutral]];
+  pcts.forEach(([id,v]) => { const b = el(id); if(b) b.textContent=pct(v); });
+}
+
+let _confUpdateCount = 0;
+function updateConfusionMatrix(conf) {
+  if (!conf || typeof conf !== 'object') return;
+  const classes = ['UP','DOWN','NEUTRAL'];
+
+  // Normalise: server sends flat {UP_UP:N,...}; handle nested too just in case
+  const flat = {};
+  const firstVal = Object.values(conf)[0];
+  if (firstVal !== null && typeof firstVal === 'object') {
+    // nested {UP:{UP:N,...},...}
+    classes.forEach(a => classes.forEach(p => {
+      flat[a + '_' + p] = ((conf[a] || {})[p]) ?? 0;
+    }));
+  } else {
+    // flat {UP_UP:N,...}
+    Object.assign(flat, conf);
+  }
+
+  // Direct cell map — IDs must match the HTML <div id="cUU"> etc.
+  const map = [
+    ['cUU','UP_UP'],    ['cUD','UP_DOWN'],    ['cUN','UP_NEUTRAL'],
+    ['cDU','DOWN_UP'],  ['cDD','DOWN_DOWN'],  ['cDN','DOWN_NEUTRAL'],
+    ['cNU','NEUTRAL_UP'],['cND','NEUTRAL_DOWN'],['cNN','NEUTRAL_NEUTRAL'],
+  ];
+  let updated = 0;
+  map.forEach(([htmlId, key]) => {
+    const el = document.getElementById(htmlId);
+    const val = flat[key];
+    if (el !== null && val !== undefined && val !== null) {
+      el.textContent = val;
+      updated++;
+    }
+  });
+
+  _confUpdateCount++;
+  const tag = document.getElementById('confUpdateTag');
+  if (tag) tag.textContent = `updated ${_confUpdateCount}× (last: ${updated}/9 cells, UP_UP=${flat['UP_UP'] ?? '?'})`;
+}
+
+// ═══════════════════════════════════════════════════════
+// DATA (live state — populated from backend on load)
+// ═══════════════════════════════════════════════════════
+const ORACLE_PARAMS = {
+  gap_threshold_pct: 0.0025,
+  neutral_band_pct: 0.0020,
+  orb_breakout_pct: 0.0012,
+  delta_bias_threshold: 150.0,
+  vwap_slope_threshold: 0.00005,
+  vol_filter_high: 32.0,
+  vol_filter_low: 12.0,
+  prev_day_return_threshold: 0.003,
+  prev_day_vwap_threshold: 0.001,
+};
+
+// Live data — populated from backend
+const STRATEGIES = [];
+const ITER_HISTORY = [];
+let RUN_DONE = 0;   // iterations completed in the CURRENT run (resets each run)
+
+// ═══════════════════════════════════════════════════════
+// NAVIGATION
+// ═══════════════════════════════════════════════════════
+function nav(el) {
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  el.classList.add('active');
+  const page = el.dataset.page;
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.getElementById('page-' + page).classList.add('active');
+  const labels = { oracle:'Oracle', strategies:'Strategies', hermes:'Hermes Chat' };
+  document.getElementById('crumb').innerHTML = `Agents → <span>${labels[page]||page}</span>`;
+  if (page === 'hermes') maybeOpeningAnalysis();
+}
+
+let _analysisRequested = false;
+async function maybeOpeningAnalysis() {
+  // Only fire once per session, and only if there's actual data to analyse
+  if (_analysisRequested) return;
+  const msgs = document.getElementById('chatMessages');
+  // If there are already real messages (more than the placeholder), skip
+  if (msgs.querySelectorAll('.msg').length > 0) return;
+  _analysisRequested = true;
+
+  // Show typing indicator
+  const typing = document.createElement('div');
+  typing.className = 'msg'; typing.id = 'oracleTyping';
+  typing.innerHTML = `<div class="msg-avatar avatar-oracle">O</div>
+    <div><div class="msg-bubble bubble-oracle" style="opacity:0.6;font-style:italic">Oracle is analysing current performance…</div></div>`;
+  msgs.appendChild(typing);
+  msgs.scrollTop = msgs.scrollHeight;
+
+  try {
+    const resp = await fetch(`${API}/api/hermes/analysis`);
+    const data = await resp.json();
+    const t = document.getElementById('oracleTyping');
+    if (t) t.remove();
+    if (data.analysis) addMessage('oracle', data.analysis);
+  } catch(e) {
+    const t = document.getElementById('oracleTyping');
+    if (t) t.remove();
+    addMessage('oracle', 'No Oracle data yet — run the Hermes loop first to generate accuracy results, then come back for analysis.');
+    console.error(e);
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+// ORACLE PAGE
+// ═══════════════════════════════════════════════════════
+let oChart = null;
+const oChartData = {
+  labels: [1,2,3,4,5,6,7],
+  overall: [0.531,0.554,0.549,0.571,0.583,0.581,0.587],
+  up:      [0.562,0.589,0.581,0.601,0.618,0.613,0.631],
+  down:    [0.498,0.512,0.514,0.528,0.541,0.542,0.554],
+  neutral: [0.521,0.541,0.538,0.561,0.567,0.569,0.572],
+};
+
+function initOracleChart() {
+  const ctx = document.getElementById('oracleChart').getContext('2d');
+  oChart = new Chart(ctx, {
+    type:'line',
+    data:{
+      labels: oChartData.labels,
+      datasets:[
+        { label:'Overall', data:oChartData.overall, borderColor:'#7fff00', backgroundColor:'rgba(127,255,0,.07)', borderWidth:2.5, pointRadius:3, tension:.35, fill:true },
+        { label:'UP',      data:oChartData.up,      borderColor:'#4ade80', borderWidth:1.5, pointRadius:2, tension:.35, borderDash:[4,3] },
+        { label:'DOWN',    data:oChartData.down,    borderColor:'#f87171', borderWidth:1.5, pointRadius:2, tension:.35, borderDash:[4,3] },
+        { label:'NEUTRAL', data:oChartData.neutral, borderColor:'#60a5fa', borderWidth:1.5, pointRadius:2, tension:.35, borderDash:[4,3] },
+      ],
+    },
+    options:{
+      responsive:true, maintainAspectRatio:false, animation:{duration:350},
+      scales:{
+        x:{ grid:{color:'rgba(42,47,69,.45)'}, ticks:{color:'#6b7394',font:{size:10}} },
+        y:{ min:.35, max:1.0, grid:{color:'rgba(42,47,69,.45)'}, ticks:{ color:'#6b7394', font:{size:10}, callback:v=>(v*100).toFixed(0)+'%' } },
+      },
+      plugins:{
+        legend:{ labels:{ color:'#6b7394', font:{size:11}, boxWidth:12, padding:10 } },
+        tooltip:{ callbacks:{ label:c=>`${c.dataset.label}: ${(c.parsed.y*100).toFixed(1)}%` } },
+      },
+    },
+  });
+}
+
+function renderOracleParams() {
+  const html = Object.entries(ORACLE_PARAMS).map(([k,v]) => {
+    const disp = typeof v === 'number' && v < 0.01 ? v.toFixed(5) : String(v);
+    return `<div class="param-row"><span class="p-name">${k}</span><span><span class="p-val">${disp}</span><span class="p-tag">Hermes</span></span></div>`;
+  }).join('');
+  document.getElementById('oParamList').innerHTML = html;
+}
+
+function renderIterLog() {
+  const body = document.getElementById('iterBody');
+  body.innerHTML = '';
+  [...ITER_HISTORY].reverse().forEach(r => {
+    const row = document.createElement('tr');
+    row.innerHTML = `
+      <td style="color:var(--text-muted);font-family:var(--mono)">${r.n}</td>
+      <td style="color:var(--accent2)">${r.p}</td>
+      <td style="font-family:var(--mono);color:var(--text-muted)">${fmt(r.o)}</td>
+      <td style="font-family:var(--mono)">${fmt(r.v)}</td>
+      <td style="font-weight:700;color:${r.ok?'var(--accent)':'var(--text-muted)'}">${pct(r.acc)}</td>
+      <td style="color:var(--up)">${pct(r.up)}</td>
+      <td style="color:var(--down)">${pct(r.dn)}</td>
+      <td style="color:var(--neutral)">${pct(r.neu)}</td>
+      <td>${r.ok?'<span class="tag-acc">✓ Accepted</span>':'<span class="tag-rej">✗ Rejected</span>'}</td>
+      <td style="font-size:11px;color:var(--text-muted);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${r.r}">${r.r}</td>`;
+    body.appendChild(row);
+  });
+}
+
+let loopRunning = false;
+
+async function runOracleLoop() {
+  if (loopRunning) return;
+  try {
+    const resp = await fetch(`${API}/api/oracle/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ iterations: 20, target_accuracy: 0.65, locked_params: [] }),
+    });
+    if (!resp.ok) {
+      const err = await resp.json();
+      alert('Cannot start loop: ' + (err.detail || resp.statusText));
+    }
+  } catch(e) {
+    alert('Server not reachable: ' + e.message);
+  }
+}
+
+async function runOracleSweep() {
+  if (loopRunning) return;
+  const trials = parseInt(prompt('Number of sweep trials?', '300')) || 300;
+  try {
+    const resp = await fetch(`${API}/api/oracle/sweep`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ trials }),
+    });
+    if (!resp.ok) {
+      const err = await resp.json();
+      alert('Cannot start sweep: ' + (err.detail || resp.statusText));
+    }
+  } catch(e) {
+    alert('Server not reachable: ' + e.message);
+  }
+}
+
+async function oracleRefresh() {
+  const btn = document.querySelector('button[onclick="oracleRefresh()"]');
+  const orig = btn ? btn.textContent : null;
+  if (btn) { btn.textContent = '↻ …'; btn.disabled = true; }
+  try {
+    const resp = await fetch(`${API}/api/status`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    applyServerState(data);
+    if (btn) { btn.textContent = '↻ Done'; setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 800); }
+  } catch(e) {
+    console.error('[Refresh failed]', e);
+    if (btn) { btn.textContent = '↻ Error'; btn.style.color = 'var(--down)'; setTimeout(() => { btn.textContent = orig; btn.style.color = ''; btn.disabled = false; }, 1500); }
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+// ELIGIBILITY GATE
+// ═══════════════════════════════════════════════════════
+
+async function refreshEligibility() {
+  const btn = document.getElementById('eligRefreshBtn');
+  if (btn) { btn.textContent = '↻ …'; btn.style.pointerEvents = 'none'; }
+  try {
+    const resp = await fetch(`${API}/api/oracle/eligibility`);
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      renderEligibilityError(err.error || `HTTP ${resp.status}`);
+      return;
+    }
+    const data = await resp.json();
+    renderEligibility(data);
+    if (btn) { btn.textContent = '↻ Done'; setTimeout(() => { btn.textContent = '↻ Check'; btn.style.pointerEvents = ''; }, 800); }
+  } catch(e) {
+    renderEligibilityError('Network error: ' + e.message);
+    if (btn) { btn.textContent = '↻ Error'; btn.style.color = 'var(--down)'; setTimeout(() => { btn.textContent = '↻ Check'; btn.style.color = ''; btn.style.pointerEvents = ''; }, 1500); }
+  }
+}
+
+function renderEligibility(data) {
+  const badge = document.getElementById('eligBadge');
+  const score = document.getElementById('eligScore');
+  const list  = document.getElementById('eligList');
+  if (!badge || !score || !list) return;
+
+  const passed  = data.passed;
+  const nPass   = data.criteria.filter(c => c.passed).length;
+  const nTotal  = data.criteria.length;
+  const nFail   = nTotal - nPass;
+
+  badge.className = 'elig-badge ' + (passed ? 'eligible' : 'candidate');
+  badge.textContent = passed ? '✅ ELIGIBLE FOR PAPER TRADING' : `⚠️ CANDIDATE — ${nFail} CRITERIA FAILING`;
+
+  score.textContent = `${nPass} / ${nTotal} criteria passing`;
+
+  list.innerHTML = data.criteria.map(c => {
+    const cls  = c.passed ? 'pass' : 'fail';
+    const icon = c.passed ? '✓' : '✗';
+    const iconColor = c.passed ? 'var(--up)' : 'var(--down)';
+    const val  = formatEligVal(c.name, c.value);
+    const thr  = formatEligVal(c.name, c.threshold);
+    const gapAbs = Math.abs(c.gap);
+    const gapStr = c.passed
+      ? `<span class="elig-gap" style="color:var(--up)">+${formatEligVal(c.name, gapAbs)}</span>`
+      : `<span class="elig-gap" style="color:var(--down)">−${formatEligVal(c.name, gapAbs)}</span>`;
+    return `<div class="elig-row ${cls}">
+      <span class="elig-icon" style="color:${iconColor}">${icon}</span>
+      <span class="elig-name">${c.description}</span>
+      <span class="elig-val" style="color:${c.passed ? 'var(--up)' : 'var(--down)'}">${val}</span>
+      <span class="elig-thr">need ${c.direction === 'above' ? '≥' : '≤'} ${thr}</span>
+      ${gapStr}
+    </div>`;
+  }).join('');
+}
+
+function formatEligVal(name, value) {
+  // Skip rate, accuracy fields → show as %
+  if (name.toLowerCase().includes('accuracy') || name.toLowerCase().includes('skip') || name.toLowerCase().includes('drift')) {
+    return (value * 100).toFixed(1) + '%';
+  }
+  // Trade days → integer
+  if (name.toLowerCase().includes('trade')) {
+    return Math.round(value).toString();
+  }
+  return value.toFixed(4);
+}
+
+function renderEligibilityError(msg) {
+  const badge = document.getElementById('eligBadge');
+  const score = document.getElementById('eligScore');
+  if (badge) { badge.className = 'elig-badge pending'; badge.textContent = '⏳ NOT EVALUATED'; }
+  if (score) score.textContent = msg;
+}
+
+function clearIterLog() {
+  ITER_HISTORY.length = 0;
+  oChartData.labels=[]; oChartData.overall=[]; oChartData.up=[]; oChartData.down=[]; oChartData.neutral=[];
+  if(oChart){ oChart.data.labels=[]; oChart.data.datasets.forEach(d=>d.data=[]); oChart.update('none'); }
+  document.getElementById('iterBody').innerHTML='<tr><td colspan="10" style="text-align:center;color:var(--text-muted);padding:22px">Log cleared</td></tr>';
+}
+
+// ═══════════════════════════════════════════════════════
+// STRATEGIES PAGE
+// ═══════════════════════════════════════════════════════
+let stratCharts = {};
+function renderStrategies(filter='all') {
+  const data = filter==='all' ? STRATEGIES : STRATEGIES.filter(s=>s.status===filter);
+  const grid = document.getElementById('stratGrid');
+  grid.innerHTML = '';
+  data.forEach(s => {
+    const div = document.createElement('div');
+    div.className = 'strat-card';
+    div.id = 'sc-'+s.id;
+    div.innerHTML = `
+      <div class="sc-head">
+        <div><div class="sc-name">${s.name}</div><div class="sc-date">Created ${s.created} · ${s.iterations} iterations</div></div>
+        <div class="status-badge status-${s.status}">${s.status.toUpperCase()}</div>
+      </div>
+      <div class="sc-metrics">
+        <div class="sc-metric"><div class="m-val" style="color:var(--accent)">${pct(s.overall)}</div><div class="m-lbl">Overall</div></div>
+        <div class="sc-metric"><div class="m-val" style="color:var(--up)">${pct(s.up)}</div><div class="m-lbl">UP</div></div>
+        <div class="sc-metric"><div class="m-val">${s.trade_days}</div><div class="m-lbl">Trade Days</div></div>
+      </div>
+      <div class="sc-mini-bars">
+        <div class="mini-bar-row"><span class="mini-lbl">UP</span><div class="mini-bg"><div class="mini-fill" style="width:${(s.up*100).toFixed(0)}%;background:var(--up)"></div></div><span class="mini-pct" style="color:var(--up)">${pct(s.up)}</span></div>
+        <div class="mini-bar-row"><span class="mini-lbl">DOWN</span><div class="mini-bg"><div class="mini-fill" style="width:${(s.down*100).toFixed(0)}%;background:var(--down)"></div></div><span class="mini-pct" style="color:var(--down)">${pct(s.down)}</span></div>
+        <div class="mini-bar-row"><span class="mini-lbl">NEUTRAL</span><div class="mini-bg"><div class="mini-fill" style="width:${(s.neutral*100).toFixed(0)}%;background:var(--neutral)"></div></div><span class="mini-pct" style="color:var(--neutral)">${pct(s.neutral)}</span></div>
+      </div>`;
+    div.onclick = () => openDetail(s);
+    grid.appendChild(div);
+  });
+}
+
+function filterStrats(f, el) {
+  document.querySelectorAll('.ftab').forEach(t=>t.classList.remove('active'));
+  el.classList.add('active');
+  closeDetail();
+  renderStrategies(f);
+}
+
+let dpChart = null;
+function openDetail(s) {
+  document.querySelectorAll('.strat-card').forEach(c=>c.classList.remove('selected'));
+  const el = document.getElementById('sc-'+s.id);
+  if (el) el.classList.add('selected');
+  const panel = document.getElementById('detailPanel');
+  panel.classList.add('open');
+  document.getElementById('dpTitle').textContent = s.name + ' — Full Backtest';
+  const grid = document.getElementById('dpGrid');
+  // Column 1: confusion matrix
+  const confHtml = `
+    <div class="card" style="padding:14px">
+      <div class="card-title" style="margin-bottom:12px">Confusion Matrix</div>
+      <div class="confusion-grid">
+        <div></div><div class="cg-head" style="color:var(--up)">UP</div><div class="cg-head" style="color:var(--down)">DOWN</div><div class="cg-head" style="color:var(--neutral)">NEU</div>
+        <div class="cg-axis">← Predicted →</div>
+        <div class="cg-label" style="color:var(--up)">UP</div><div class="cg-cell cg-diag">${s.confusion.UU}</div><div class="cg-cell cg-off">${s.confusion.UD}</div><div class="cg-cell cg-off">${s.confusion.UN}</div>
+        <div class="cg-label" style="color:var(--down)">DOWN</div><div class="cg-cell cg-off">${s.confusion.DU}</div><div class="cg-cell cg-diag">${s.confusion.DD}</div><div class="cg-cell cg-off">${s.confusion.DN}</div>
+        <div class="cg-label" style="color:var(--neutral)">NEU</div><div class="cg-cell cg-off">${s.confusion.NU}</div><div class="cg-cell cg-off">${s.confusion.ND}</div><div class="cg-cell cg-diag">${s.confusion.NN}</div>
+      </div>
+    </div>`;
+  // Column 2: accuracy history chart
+  const chartHtml = `
+    <div class="card" style="padding:14px">
+      <div class="card-title" style="margin-bottom:12px">Accuracy History (${s.history.length} iterations)</div>
+      <div class="dp-chart-wrap"><canvas id="dpChart_${s.id}"></canvas></div>
+    </div>`;
+  // Column 3: params
+  const paramHtml = `
+    <div class="card" style="padding:14px">
+      <div class="card-title" style="margin-bottom:10px">Strategy Parameters</div>
+      <div class="param-list">${Object.entries(s.params).map(([k,v])=>`<div class="param-row"><span class="p-name">${k}</span><span class="p-val">${typeof v==='number'&&v<0.01?v.toFixed(5):v}</span></div>`).join('')}</div>
+      <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border)">
+        <div style="display:flex;gap:12px;flex-wrap:wrap">
+          <div><div class="metric-label">Skip Rate</div><div style="font-weight:800;color:var(--skip)">${pct(s.skip)}</div></div>
+          <div><div class="metric-label">Active Days</div><div style="font-weight:800">${s.trade_days}</div></div>
+          <div><div class="metric-label">UP days</div><div style="font-weight:800;color:var(--up)">${s.up_count}</div></div>
+          <div><div class="metric-label">DOWN days</div><div style="font-weight:800;color:var(--down)">${s.down_count}</div></div>
+          <div><div class="metric-label">NEU days</div><div style="font-weight:800;color:var(--neutral)">${s.neutral_count}</div></div>
+        </div>
+      </div>
+    </div>`;
+  grid.innerHTML = confHtml + chartHtml + paramHtml;
+  panel.scrollIntoView({ behavior:'smooth', block:'nearest' });
+  // Render chart
+  if (dpChart) { dpChart.destroy(); dpChart = null; }
+  setTimeout(() => {
+    const ctx = document.getElementById('dpChart_'+s.id);
+    if (!ctx) return;
+    dpChart = new Chart(ctx.getContext('2d'), {
+      type:'line',
+      data:{ labels:s.history.map((_,i)=>i+1), datasets:[{ label:'Overall', data:s.history, borderColor:'#7fff00', backgroundColor:'rgba(127,255,0,.08)', borderWidth:2, pointRadius:2.5, tension:.35, fill:true }] },
+      options:{ responsive:true, maintainAspectRatio:false, animation:{duration:300},
+        scales:{ x:{ grid:{color:'rgba(42,47,69,.4)'}, ticks:{color:'#6b7394',font:{size:9}} }, y:{ min:.40, max:.70, grid:{color:'rgba(42,47,69,.4)'}, ticks:{color:'#6b7394',font:{size:9},callback:v=>(v*100).toFixed(0)+'%'} } },
+        plugins:{ legend:{display:false}, tooltip:{ callbacks:{ label:c=>(c.parsed.y*100).toFixed(1)+'%' } } },
+      },
+    });
+  }, 60);
+}
+
+function closeDetail() {
+  document.getElementById('detailPanel').classList.remove('open');
+  document.querySelectorAll('.strat-card').forEach(c=>c.classList.remove('selected'));
+  if (dpChart) { dpChart.destroy(); dpChart=null; }
+}
+
+// ═══════════════════════════════════════════════════════
+// HERMES CHAT
+// ═══════════════════════════════════════════════════════
+function buildLockGrid() {
+  const g = document.getElementById('lockGrid');
+  g.innerHTML = Object.keys(ORACLE_PARAMS).map(k=>`
+    <div class="lock-item" id="lock_${k}">
+      <input type="checkbox" id="chk_${k}" onchange="toggleLock('${k}')">
+      <label for="chk_${k}">${k}</label>
+    </div>`).join('');
+}
+function toggleLock(k) { document.getElementById('lock_'+k).classList.toggle('locked', document.getElementById('chk_'+k).checked); }
+
+function addMessage(role, html, extra) {
+  const msgs = document.getElementById('chatMessages');
+  const div = document.createElement('div');
+  div.className = 'msg' + (role==='user'?' msg-user':'');
+  const avatar = role==='user'
+    ? `<div class="msg-avatar avatar-user">K</div>`
+    : `<div class="msg-avatar avatar-oracle">O</div>`;
+  const bubbleClass = role==='user' ? 'bubble-user' : 'bubble-oracle';
+  const time = new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+  let extraHtml = '';
+  if (extra && extra.type==='result') {
+    extraHtml = `<div class="chat-result"><div class="cr-label">Backtest Results</div>${Object.entries(extra.data).map(([k,v])=>`<div class="cr-row"><span class="cr-key">${k}</span><span class="cr-val">${v}</span></div>`).join('')}</div>`;
+  }
+  if (extra && extra.type==='test') {
+    const tr = extra.data;
+    const accepted = tr.accepted;
+    const delta = tr.delta >= 0 ? '+' + (tr.delta*100).toFixed(2) + '%' : (tr.delta*100).toFixed(2) + '%';
+    const badge = accepted
+      ? `<span style="color:var(--up);font-weight:700">&#10003; ACCEPTED ${delta}</span>`
+      : `<span style="color:var(--down);font-weight:700">&#10007; REVERTED ${delta}</span>`;
+    extraHtml = `<div class="chat-result" style="margin-top:8px">
+      <div class="cr-label">Test Result &middot; ${tr.param}</div>
+      <div class="cr-row"><span class="cr-key">Change</span><span class="cr-val">${tr.old_value} &rarr; ${tr.new_value}</span></div>
+      <div class="cr-row"><span class="cr-key">Accuracy</span><span class="cr-val">${pct(tr.old_accuracy)} &rarr; ${pct(tr.new_accuracy)} &nbsp;${badge}</span></div>
+      <div class="cr-row"><span class="cr-key">UP / DOWN / NEU</span><span class="cr-val">${pct(tr.up)} / ${pct(tr.down)} / ${pct(tr.neutral)}</span></div>
+    </div>`;
+  }
+  if (extra && extra.type==='concept') {
+    extraHtml = `<div class="chat-result" style="margin-top:8px;border-color:var(--neutral)">
+      <div class="cr-label" style="color:var(--neutral)">Strategy Concept Logged</div>
+      <div class="cr-row"><span class="cr-key">Name</span><span class="cr-val">${extra.data.name}</span></div>
+    </div>`;
+  }
+  div.innerHTML = avatar + `<div><div class="msg-bubble ${bubbleClass}">${html}${extraHtml}</div><div class="msg-time">${role==='user'?'You':'Oracle'} &middot; ${time}</div></div>`;
+  msgs.appendChild(div);
+  msgs.scrollTop = msgs.scrollHeight;
+  return div;
+}
+
+function addTyping() {
+  const msgs = document.getElementById('chatMessages');
+  const div = document.createElement('div');
+  div.className = 'msg'; div.id = 'typing-indicator';
+  div.innerHTML = `<div class="msg-avatar avatar-oracle">O</div><div class="msg-bubble bubble-oracle"><div class="typing-dots"><span></span><span></span><span></span></div></div>`;
+  msgs.appendChild(div);
+  msgs.scrollTop = msgs.scrollHeight;
+}
+function removeTyping() { const t = document.getElementById('typing-indicator'); if (t) t.remove(); }
+
+let chatBusy = false;
+async function sendChat() {
+  if (chatBusy) return;
+  const inp = document.getElementById('chatInput');
+  const text = inp.value.trim();
+  if (!text) return;
+  inp.value = '';
+  addMessage('user', text);
+  chatBusy = true;
+  addTyping();
+
+  // Check if user wants to run the loop or OOS from chat
+  const lower = text.toLowerCase();
+  const wantsRun = lower.includes('run') && (lower.includes('loop') || lower.includes('iter') || lower.includes('optim'));
+  const wantsOOS = lower.includes('oos') || lower.includes('out-of-sample') || lower.includes('validat');
+
+  if (wantsRun) {
+    removeTyping();
+    const n = parseInt((lower.match(/\d+/)||['20'])[0]);
+    addMessage('oracle', `Starting a ${n}-iteration loop. I'll optimize one direction threshold at a time — you can watch progress on the Oracle page.`);
+    chatBusy = false;
+    // Kick off the real loop
+    try {
+      await fetch(`${API}/api/oracle/run`, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ iterations: n, target_accuracy: 0.65, locked_params: [] }),
+      });
+    } catch(e) { console.error(e); }
+    return;
+  }
+
+  if (wantsOOS) {
+    removeTyping();
+    addMessage('oracle', 'Running out-of-sample validation on the held-out 20% of data...');
+    chatBusy = false;
+    try {
+      const resp = await fetch(`${API}/api/oracle/oos`, { method:'POST' });
+      const data = await resp.json();
+      const drift = (data.drift*100).toFixed(1);
+      const pass = data.pass ? '✓ Pass' : '✗ Fail';
+      addMessage('oracle', 'OOS validation complete.', { type:'result', data:{
+        'IS Accuracy': pct(data.is.overall),
+        'OOS Accuracy': pct(data.oos.overall),
+        'Drift': drift+'%',
+        'OOS Trade Days': data.oos.trade_days,
+        'UP OOS': pct(data.oos.up),
+        'DOWN OOS': pct(data.oos.down),
+        'NEUTRAL OOS': pct(data.oos.neutral),
+        'Pass/Fail': `${pass} (<10% drift threshold)`,
+      }});
+    } catch(e) {
+      addMessage('oracle', 'OOS validation failed: ' + e.message);
+    }
+    return;
+  }
+
+  // Default: send to Hermes — supports conversational reply, test_suggestion, strategy_concept
+  try {
+    const resp = await fetch(`${API}/api/hermes/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: text }),
+    });
+    removeTyping();
+    if (!resp.ok) {
+      const err = await resp.json();
+      addMessage('oracle', `&#9888; ${err.detail || 'Server error'}`);
+    } else {
+      const data = await resp.json();
+      const responseText = (data.response || '').replace(/\n/g, '<br>');
+
+      // Determine what extra widget to show alongside the response
+      let extra = null;
+      if (data.test_result && !data.test_result.error) {
+        extra = { type: 'test', data: data.test_result };
+      } else if (data.concept_logged) {
+        extra = { type: 'concept', data: { name: data.concept_logged } };
+      }
+
+      addMessage('oracle', responseText, extra);
+
+      // If test was accepted, refresh param display (WS broadcast handles accuracy update)
+      if (data.test_result && data.test_result.accepted) {
+        renderOracleParams();
+      }
+    }
+  } catch(e) {
+    removeTyping();
+    addMessage('oracle', `&#9888; Could not reach server: ${e.message}. Make sure <code>python server.py</code> is running.`);
+  }
+  chatBusy = false;
+}
+
+async function clearChatHistory() {
+  try {
+    await fetch(`${API}/api/hermes/chat`, { method: 'DELETE' });
+    document.getElementById('chatMessages').innerHTML = `
+      <div class="msg">
+        <div class="msg-avatar avatar-oracle">O</div>
+        <div><div class="msg-bubble bubble-oracle">Chat history cleared. Fresh conversation started.</div>
+        <div class="msg-time">Oracle &middot; now</div></div>
+      </div>`;
+  } catch(e) { console.error(e); }
+}
+
+async function rpRun() {
+  if (loopRunning) return;
+  const total = parseInt(document.getElementById('rpIter').value) || 20;
+  const lockedParams = [];
+  document.querySelectorAll('.lock-item.locked').forEach(el => {
+    const k = el.id.replace('lock_',''); lockedParams.push(k);
+  });
+  try {
+    const resp = await fetch(`${API}/api/oracle/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ iterations: total, target_accuracy: 0.65, locked_params: lockedParams }),
+    });
+    if (!resp.ok) {
+      const err = await resp.json();
+      alert('Cannot start: ' + (err.detail || resp.statusText));
+    }
+  } catch(e) {
+    alert('Server not reachable: ' + e.message);
+  }
+}
+
+async function rpStop() {
+  try {
+    await fetch(`${API}/api/oracle/stop`, { method: 'POST' });
+  } catch(e) { console.error(e); }
+}
+
+async function rpReset() {
+  const btn = document.getElementById('rpResetBtn');
+  if (btn) { btn.textContent = '↺ …'; btn.disabled = true; }
+  try {
+    const resp = await fetch(`${API}/api/oracle/reset`, { method: 'POST' });
+    const data = await resp.json();
+    setLoopState(false);
+    document.getElementById('rsStatus').textContent = 'Idle';
+    if (btn) { btn.textContent = '↺ Reset'; btn.disabled = false; }
+    console.info('[Reset] Loop state cleared. was_running=', data.was_running);
+  } catch(e) {
+    console.error('[Reset failed]', e);
+    if (btn) { btn.textContent = '↺ Reset'; btn.disabled = false; }
+  }
+}
+
+async function runOOS() {
+  nav(document.querySelector('[data-page="hermes"]'));
+  addMessage('oracle', 'Running out-of-sample validation on the held-out 20% of data...');
+  try {
+    const resp = await fetch(`${API}/api/oracle/oos`, { method: 'POST' });
+    const data = await resp.json();
+    const drift = (data.drift*100).toFixed(1);
+    addMessage('oracle', 'OOS complete.', { type:'result', data:{
+      'IS Accuracy': pct(data.is.overall), 'OOS Accuracy': pct(data.oos.overall),
+      'Drift': drift+'%', 'OOS Days': data.oos.trade_days,
+      'UP OOS': pct(data.oos.up), 'DOWN OOS': pct(data.oos.down),
+      'NEUTRAL OOS': pct(data.oos.neutral),
+      'Pass/Fail': data.pass ? '&#10003; Pass (<10% drift)' : '&#10007; Fail (>10% drift)',
+    }});
+  } catch(e) {
+    addMessage('oracle', '&#9888; OOS failed: ' + e.message);
+  }
+}
+
+// ===============================================================
+// UTILS
+// ===============================================================
+function pct(v) { return v==null||isNaN(v)?'\u2014':(v*100).toFixed(1)+'%'; }
+function fmt(v) { if (v==null) return '\u2014'; if (typeof v==='number'&&v<0.01) return v.toFixed(5); return String(v); }
+
+// ===============================================================
+// STRATEGIES — live load from backend
+// ===============================================================
+async function loadStrategies() {
+  try {
+    const resp = await fetch(`${API}/api/strategies`);
+    const data = await resp.json();
+    STRATEGIES.length = 0;
+    (data.strategies || []).forEach(s => {
+      // Normalise confusion keys to short form (UU, UD...) used by the UI
+      if (s.confusion) {
+        const longToShort = { UP_UP:'UU',UP_DOWN:'UD',UP_NEUTRAL:'UN', DOWN_UP:'DU',DOWN_DOWN:'DD',DOWN_NEUTRAL:'DN', NEUTRAL_UP:'NU',NEUTRAL_DOWN:'ND',NEUTRAL_NEUTRAL:'NN' };
+        const conf = {};
+        Object.entries(s.confusion).forEach(([k,v]) => { conf[longToShort[k]||k] = v; });
+        s.confusion = conf;
+      }
+      STRATEGIES.push(s);
+    });
+    renderStrategies();
+  } catch(e) {
+    console.error('[Strategies load failed]', e);
+  }
+}
+
+// ===============================================================
+// WALK-FORWARD VALIDATION
+// ===============================================================
+async function runWalkForward() {
+  const btn = document.getElementById('wfBtn');
+  const body = document.getElementById('wfBody');
+  if (btn) { btn.textContent = '▶ Running…'; btn.style.pointerEvents = 'none'; }
+  try {
+    const resp = await fetch(`${API}/api/oracle/walkforward?folds=6`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const r = await resp.json();
+
+    body.innerHTML = r.folds.map(f => {
+      const dim = f.thin ? 'opacity:.45' : '';
+      const skipTip = Object.entries(f.skip_reasons || {}).map(([k,v]) => `${k}: ${v}`).join(', ');
+      return `<tr style="${dim}" title="${skipTip}">
+        <td>${f.fold}${f.thin ? ' ⚠' : ''}</td>
+        <td style="font-size:10.5px">${f.start} → ${f.end}</td>
+        <td>${f.total_days}</td>
+        <td>${f.trade_days}</td>
+        <td>${pct(f.skip_rate)}</td>
+        <td style="font-weight:700;color:${f.accuracy >= 0.5 ? 'var(--accent)' : 'var(--down)'}">${pct(f.accuracy)}</td>
+        <td>${pct(f.macro)}</td>
+        <td>${pct(f.up)}</td><td>${pct(f.down)}</td><td>${pct(f.neutral)}</td>
+      </tr>`;
+    }).join('');
+
+    const verdictColors = { stable: 'var(--up)' };
+    const summary = document.getElementById('wfSummary');
+    summary.innerHTML =
+      `Verdict: <strong style="color:${verdictColors[r.verdict] || 'var(--warn)'}">${r.verdict}</strong> · ` +
+      `mean ${pct(r.mean_accuracy)} ± ${pct(r.std_accuracy)} (min ${pct(r.min_accuracy)}, max ${pct(r.max_accuracy)}) · ` +
+      `macro ${pct(r.mean_macro)} · ${r.total_trade_days} active days` +
+      (r.thin_folds ? ` · <span style="color:var(--warn)">${r.thin_folds} thin fold(s) excluded (⚠ rows)</span>` : '');
+  } catch(e) {
+    body.innerHTML = `<tr><td colspan="10" style="color:var(--down);padding:14px">Walk-forward failed: ${e.message}</td></tr>`;
+  } finally {
+    if (btn) { btn.textContent = '▶ Run (6 folds)'; btn.style.pointerEvents = ''; }
+  }
+}
+
+// ===============================================================
+// DAILY SIGNALS — per-day confidence (trade agent input)
+// ===============================================================
+async function loadDailySignals() {
+  const btn = document.getElementById('dsBtn');
+  const body = document.getElementById('dsBody');
+  if (btn) { btn.textContent = '▶ Loading…'; btn.style.pointerEvents = 'none'; }
+  try {
+    const resp = await fetch(`${API}/api/oracle/days?window=oos&limit=250`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const r = await resp.json();
+
+    const dirColor = d => d === 'UP' ? 'var(--up)' : d === 'DOWN' ? 'var(--down)' : d === 'NEUTRAL' ? 'var(--neutral)' : 'var(--text-muted)';
+    body.innerHTML = r.days.slice().reverse().map(d => `<tr style="${d.skipped ? 'opacity:.4' : ''}">
+      <td>${d.date}</td>
+      <td style="font-weight:700;color:${dirColor(d.call)}">${d.call}</td>
+      <td style="color:${dirColor(d.actual)}">${d.actual}</td>
+      <td>${d.skipped ? '—' : (d.correct ? '<span style="color:var(--up)">✓</span>' : '<span style="color:var(--down)">✗</span>')}</td>
+      <td style="font-weight:700">${d.skipped ? '—' : d.confidence.toFixed(2)}</td>
+      <td>${d.up_score.toFixed(2)}</td>
+      <td>${d.down_score.toFixed(2)}</td>
+      <td>${d.neutral_score.toFixed(2)}</td>
+      <td style="font-size:10.5px">${d.lean}</td>
+      <td style="font-size:10.5px;color:var(--text-muted)">${d.skip_reason || ''}</td>
+    </tr>`).join('');
+
+    const buckets = (r.confidence_buckets || []).map(b =>
+      `<span style="display:inline-block;margin-right:14px">conf ${b.confidence_range}: <strong>${pct(b.accuracy)}</strong> (${b.days}d)</span>`
+    ).join('');
+    const reasons = Object.entries(r.skip_reasons || {}).map(([k,v]) => `${k}: ${v}`).join(', ');
+    document.getElementById('dsBuckets').innerHTML =
+      (buckets ? `Accuracy by confidence bucket: ${buckets}<br>` : '') +
+      `Skip rate ${pct(r.skip_rate)}${reasons ? ` — ${reasons}` : ''}`;
+  } catch(e) {
+    body.innerHTML = `<tr><td colspan="10" style="color:var(--down);padding:14px">Load failed: ${e.message}</td></tr>`;
+  } finally {
+    if (btn) { btn.textContent = '▶ Load'; btn.style.pointerEvents = ''; }
+  }
+}
+
+// ===============================================================
+// TRADE AGENT — POLICY RACE
+// ===============================================================
+let prChartObj = null;
+
+async function runPolicyRace() {
+  const btn = document.getElementById('prBtn');
+  const body = document.getElementById('prBody');
+  const win = document.getElementById('prWindow')?.value || 'oos';
+  if (btn) { btn.textContent = '▶ Racing…'; btn.disabled = true; }
+  body.innerHTML = `<tr><td colspan="10" style="text-align:center;color:var(--text-muted);padding:18px">Simulating every trade along intraday paths — this can take a minute…</td></tr>`;
+  try {
+    const resp = await fetch(`${API}/api/trade/compare?window=${win}`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const r = await resp.json();
+
+    const money = v => (v < 0 ? '-' : '') + '$' + Math.abs(v).toLocaleString(undefined, {maximumFractionDigits: 0});
+    const rows = Object.entries(r.policies).map(([name, p]) => {
+      const types = Object.entries(p.by_trade_type || {})
+        .map(([t, s]) => `${t.replace('_spread','')}: ${s.trades} (${s.wins}W, ${money(s.pnl)})`)
+        .join('<br>');
+      const retColor = p.return_pct >= 0 ? 'var(--up)' : 'var(--down)';
+      return `<tr>
+        <td style="font-weight:700">${name}</td>
+        <td>${p.n_trades}</td>
+        <td>${pct(p.win_rate)}</td>
+        <td style="color:${p.expectancy >= 0 ? 'var(--up)' : 'var(--down)'}">${money(p.expectancy)}</td>
+        <td>${p.profit_factor ?? '∞'}</td>
+        <td>${p.sharpe}</td>
+        <td>${pct(p.max_drawdown_pct)}</td>
+        <td style="font-weight:700">${money(p.final_equity)}</td>
+        <td style="font-weight:700;color:${retColor}">${pct(p.return_pct)}</td>
+        <td style="font-size:10.5px">${types}</td>
+      </tr>`;
+    });
+    body.innerHTML = rows.join('');
+    document.getElementById('prSummary').innerHTML =
+      `${r.days} days (${r.window}) · params: strikes ${r.params.em_mult_high}–${r.params.em_mult_low}×EM by confidence, ` +
+      `condor wings ${r.params.condor_em_mult}×EM, width ${r.params.spread_width}, PT ${r.params.profit_target_pct}%, stop ${r.params.stop_loss_pct}%`;
+
+    // Debug diagnostics — always shown to make zero-trade issues visible
+    const dbg = r.debug || {};
+    const exitAll = {};
+    Object.values(r.policies).forEach(p => {
+      Object.entries(p.exit_reasons || {}).forEach(([k,v]) => { exitAll[k] = (exitAll[k]||0)+v; });
+    });
+    const exitStr = Object.entries(exitAll).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`${k}: ${v}`).join(' | ') || 'none';
+    const callStr = dbg.call_counts ? Object.entries(dbg.call_counts).map(([k,v])=>`${k}:${v}`).join(' ') : '—';
+    const barsStr = dbg.sample_bars_ok !== undefined ? `bars ok:${dbg.sample_bars_ok} none:${dbg.sample_bars_none}` : (dbg.raw_rows !== undefined ? `raw_rows:${dbg.raw_rows} oos_features:${dbg.features_oos_rows} spx:${dbg.spx_rows} filtered_out(sample):${dbg.sample_filtered_out}` : '');
+    const debugEl = document.getElementById('prDebug');
+    if (debugEl) { debugEl.style.display = 'block'; debugEl.innerHTML =
+      `signal_days: <b>${dbg.signal_days_count ?? r.days}</b> · calls: ${callStr} · bars(sample): ${barsStr}<br>exit reasons: ${exitStr}` +
+      (dbg.raw_error ? `<br><span style="color:var(--down)">raw error: ${dbg.raw_error}</span>` : '') +
+      (dbg.sample_raw_dates ? `<br>sample dates: ${dbg.sample_raw_dates.join(', ')} | spx_rows: ${dbg.spx_rows}, vix_rows: ${dbg.vix_rows}` : ''); }
+
+    // Equity curves
+    const ctx = document.getElementById('prChart');
+    if (ctx && window.Chart) {
+      if (prChartObj) prChartObj.destroy();
+      const colors = { directional_only: '#7fff00', always_in: '#00bfff' };
+      const datasets = Object.entries(r.policies).map(([name, p]) => ({
+        label: name, data: p.equity_curve, borderColor: colors[name] || '#fff',
+        borderWidth: 2, pointRadius: 0, tension: .2, fill: false,
+      }));
+      const maxLen = Math.max(...datasets.map(d => d.data.length));
+      prChartObj = new Chart(ctx, {
+        type: 'line',
+        data: { labels: Array.from({length: maxLen}, (_, i) => i), datasets },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { labels: { color: '#aaa', font: { size: 10 } } } },
+          scales: {
+            x: { display: false },
+            y: { ticks: { color: '#888', font: { size: 10 } }, grid: { color: 'rgba(255,255,255,.05)' } },
+          },
+        },
+      });
+    }
+  } catch(e) {
+    body.innerHTML = `<tr><td colspan="10" style="color:var(--down);padding:14px">Race failed: ${e.message}</td></tr>`;
+  } finally {
+    if (btn) { btn.textContent = '▶ Race'; btn.disabled = false; }
+  }
+}
+
+// ===============================================================
+// HEALTH — DB + Hermes status chips (so persistence can never
+// silently disappear: if the DB chip is red, iterations are NOT
+// being saved to Postgres)
+// ===============================================================
+async function refreshHealth() {
+  const dbChip = document.getElementById('chipDb');
+  const hChip  = document.getElementById('chipHermes');
+  try {
+    const resp = await fetch(`${API}/api/health`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const h = await resp.json();
+
+    if (dbChip) {
+      const db = h.db || {};
+      if (db.ok && db.backend === 'postgres') {
+        dbChip.innerHTML = `DB: <span style="color:var(--up)">Postgres ✓</span> <span style="color:var(--text-muted)">(${db.iterations} iters)</span>`;
+      } else if (db.ok && db.backend === 'sqlite') {
+        dbChip.innerHTML = `DB: <span style="color:var(--warn)">SQLite fallback</span> <span style="color:var(--text-muted)">(${db.iterations} iters)</span>`;
+        dbChip.title = 'Postgres unreachable — history is being saved locally to strategy-lab/data/oracle_history.db';
+      } else {
+        dbChip.innerHTML = `DB: <span style="color:var(--down)">NOT PERSISTING ✗</span>`;
+        dbChip.title = db.error || 'No registry available — iterations will be lost!';
+      }
+    }
+    if (hChip) {
+      hChip.innerHTML = h.hermes && h.hermes.ok
+        ? `Hermes: <span style="color:var(--up)">${h.hermes.model} ✓</span>`
+        : `Hermes: <span style="color:var(--down)">offline ✗</span>`;
+      if (h.hermes && !h.hermes.ok) hChip.title = 'Start Ollama (`ollama serve`) and pull hermes3';
+    }
+  } catch(e) {
+    if (dbChip) dbChip.innerHTML = `DB: <span style="color:var(--down)">?</span>`;
+    if (hChip)  hChip.innerHTML  = `Hermes: <span style="color:var(--down)">?</span>`;
+  }
+}
+
+// ===============================================================
+// BOOT — this was missing entirely (the file used to end mid-function,
+// which broke the whole script block). Everything starts here.
+// ===============================================================
+document.addEventListener('DOMContentLoaded', () => {
+  initOracleChart();
+  buildLockGrid();
+  renderOracleParams();
+  renderIterLog();
+  connectWS();          // live updates + initial state push from server
+  oracleRefresh();      // initial /api/status pull (includes hydrated history)
+  loadStrategies();
+  refreshHealth();
+  setInterval(refreshHealth, 30000);
+});
+</script>
+</body>
+</html>
