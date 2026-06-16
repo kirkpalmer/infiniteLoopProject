@@ -64,8 +64,7 @@ POLL_INTERVAL_SECONDS = 10
 # Profit target: close when premium decays to (1 - target_pct/100) of credit
 # Stop loss: close when loss reaches (stop_loss_pct/100) of credit
 
-# Webull equity API (used to get account equity at startup)
-EQUITY_API_URL = "https://tradeapi.webull.com/api/account/financial/strength"
+DEFAULT_STARTING_EQUITY = 5000.0
 
 
 # ── Logging setup ──────────────────────────────────────────────────────────────
@@ -127,38 +126,37 @@ def _fetch_prior_day_context() -> PriorDayContext:
 
 # ── Account equity ─────────────────────────────────────────────────────────────
 
-async def _fetch_account_equity() -> float:
+async def _fetch_account_equity(api_client=None) -> float:
     """
-    Fetch current account equity from Webull.
+    Fetch current account equity via Webull SDK TradeClient.
     Falls back to DEFAULT_STARTING_EQUITY if the call fails.
     """
-    DEFAULT_STARTING_EQUITY = 5000.0
     try:
-        import aiohttp
-        headers = {
-            "App": "desktop", "App-Group": "broker",
-            "Appid": config.WEBULL_APP_KEY,
-            "Did": config.WEBULL_ACCOUNT_ID,
-            "Access-Token": config.WEBULL_TRADE_TOKEN,
-        }
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                EQUITY_API_URL, headers=headers,
-                params={"accountId": config.WEBULL_ACCOUNT_ID},
-                timeout=aiohttp.ClientTimeout(total=10),
-            ) as resp:
-                resp.raise_for_status()
-                data = await resp.json()
-                # Field name may vary — check Webull API docs
-                equity = float(
-                    data.get("netLiquidation")
-                    or data.get("totalAssets")
-                    or data.get("data", {}).get("netLiquidation", DEFAULT_STARTING_EQUITY)
+        from webull.trade.trade_client import TradeClient
+        loop = asyncio.get_event_loop()
+
+        def _get_equity():
+            trade_client = TradeClient(api_client or config.build_api_client())
+            resp = trade_client.account_v2.get_account_detail(
+                account_id=config.WEBULL_ACCOUNT_ID
+            )
+            if hasattr(resp, "body") and resp.body:
+                body = resp.body.__dict__ if hasattr(resp.body, "__dict__") else resp.body
+                return float(
+                    body.get("netLiquidation")
+                    or body.get("net_liquidation")
+                    or body.get("totalAssets")
+                    or DEFAULT_STARTING_EQUITY
                 )
-                LOGGER.info("Account equity from Webull: $%.2f", equity)
-                return equity
+            return DEFAULT_STARTING_EQUITY
+
+        equity = await loop.run_in_executor(None, _get_equity)
+        LOGGER.info("Account equity from Webull SDK: $%.2f", equity)
+        return equity
     except Exception as exc:
-        LOGGER.warning("Could not fetch equity from Webull (%s) — using $%.2f", exc, DEFAULT_STARTING_EQUITY)
+        LOGGER.warning(
+            "Could not fetch equity via SDK (%s) — using $%.2f", exc, DEFAULT_STARTING_EQUITY
+        )
         return DEFAULT_STARTING_EQUITY
 
 
@@ -436,17 +434,20 @@ async def main() -> None:
         LOGGER.critical("No active strategy in database — cannot start. Run Strategy Lab first.")
         sys.exit(1)
 
+    # Build a single SDK client shared by all components
+    api_client = config.build_api_client()
+
     # Shared components
     pos_state    = PositionState()
-    order_mgr    = OrderManager()
-    pricer       = SpreadPricer()
+    order_mgr    = OrderManager(api_client=api_client)
+    pricer       = SpreadPricer(api_client=api_client)
     trade_logger = TradeLogger()
 
     # Fetch prior-day context for Oracle features
     prior_ctx = _fetch_prior_day_context()
 
     # Account equity
-    equity = await _fetch_account_equity()
+    equity = await _fetch_account_equity(api_client=api_client)
 
     # Watchdog close callback — closes any open position
     async def _close_all() -> None:
@@ -467,7 +468,7 @@ async def main() -> None:
     def _on_bar(bar: Bar) -> None:
         watchdog.update_feed(time.time())
 
-    feed = WebullFeed(on_bar=_on_bar)
+    feed = WebullFeed(api_client=api_client, on_bar=_on_bar)
     await feed.start()
 
     # Graceful shutdown handler
@@ -482,7 +483,7 @@ async def main() -> None:
 
             # Reset daily state at midnight ET
             if now_et.hour == 0 and now_et.minute < 1:
-                equity = await _fetch_account_equity()
+                equity = await _fetch_account_equity(api_client=api_client)
                 prior_ctx = _fetch_prior_day_context()
                 pos_state.reset()
                 watchdog.reset_for_new_day(starting_equity=equity)
@@ -534,4 +535,4 @@ async def _shutdown(
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio

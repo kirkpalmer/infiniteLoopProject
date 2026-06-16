@@ -1,31 +1,35 @@
 """
-orders/manager.py — Webull multi-leg options order placement via HTTP API.
+orders/manager.py — Webull multi-leg options order placement via SDK.
 
-Places SPX/SPXW 0DTE vertical spreads and iron condors as combo orders.
-In paper mode (WEBULL_TRADING_MODE=paper), the API call is logged but no
-real order is sent — we fake a fill at the mid-price for paper tracking.
+Places SPX/SPXW 0DTE vertical spreads and iron condors.
 
-Webull multi-leg order format (from OpenAPI docs):
-  POST /order/combo
+Paper mode (IS_PAPER_MODE = True — default until Phase 3):
+  - Logs the intended order
+  - Returns a synthetic PAPER_FILL at the mid-price
+  - Does NOT call the Webull API
+
+Live mode (WEBULL_ENVIRONMENT=prod, Phase 3 only):
+  - Uses TradeClient.order_v2.place_option() for multi-leg orders
+  - The SDK handles auth internally — no Access-Token header needed
+
+Order leg format expected by the SDK:
   {
-    "accountId": "...",
-    "orderType": "LMT",
-    "timeInForce": "DAY",
-    "comboType": "VERTICAL",
-    "legs": [
-      {"action": "SELL", "ratio": 1, "symbol": "SPXW", "expDate": "...", "strike": "...", "right": "P/C"},
-      {"action": "BUY",  "ratio": 1, "symbol": "SPXW", "expDate": "...", "strike": "...", "right": "P/C"}
-    ],
-    "lmtPrice": "X.XX",   # net credit for sells, negative for debit (we always sell)
-    "qty": "1"
+    "instrument_type": "OPTION",
+    "market":          "US",
+    "strike":          "5750.0",
+    "side":            "PUT",          # or "CALL"
+    "expire_date":     "2025-06-15",   # YYYY-MM-DD
+    "action":          "SELL",         # or "BUY"
   }
 
-For paper mode, no HTTP call is made. Returns a synthetic OrderResult with a
-paper-fill at the mid-price.
+The SDK's place_option() takes:
+  trade_client.order_v2.place_option(account_id, new_orders)
+  where new_orders is a list of dicts as above.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 import uuid
@@ -45,87 +49,85 @@ LOGGER = logging.getLogger("infiniteloop.orders.manager")
 
 EASTERN = pytz.timezone("US/Eastern")
 
-# Webull order API endpoint
-ORDER_BASE_URL = "https://tradeapi.webull.com/api/trade"
-
 
 class OrderStatus(Enum):
-    PENDING     = "PENDING"
-    FILLED      = "FILLED"
-    PARTIAL     = "PARTIAL"
-    CANCELLED   = "CANCELLED"
-    REJECTED    = "REJECTED"
-    PAPER_FILL  = "PAPER_FILL"   # synthetic fill in paper mode
+    PENDING    = "PENDING"
+    FILLED     = "FILLED"
+    PARTIAL    = "PARTIAL"
+    CANCELLED  = "CANCELLED"
+    REJECTED   = "REJECTED"
+    PAPER_FILL = "PAPER_FILL"   # synthetic fill in paper mode
 
 
 @dataclass
 class OrderLeg:
-    """One leg of a multi-leg options order."""
-    action: str        # BUY or SELL
-    symbol: str        # SPXW
-    exp_date: str      # YYYYMMDD
-    strike: float
-    right: str         # P or C
-    ratio: int = 1
+    """One leg of a multi-leg options order (SDK format)."""
+    action:       str    # BUY or SELL
+    side:         str    # PUT or CALL
+    strike:       float
+    expire_date:  str    # YYYY-MM-DD
+    instrument_type: str = "OPTION"
+    market:          str = "US"
+
+    def to_sdk_dict(self) -> dict:
+        return {
+            "instrument_type": self.instrument_type,
+            "market":          self.market,
+            "strike":          str(self.strike),
+            "side":            self.side,
+            "expire_date":     self.expire_date,
+            "action":          self.action,
+        }
 
 
 @dataclass
 class OrderResult:
     """Result returned after placing or simulating an order."""
-    order_id: str
-    status: OrderStatus
-    spread_type: str
-    contracts: int
-    net_credit: float          # SPX points
-    net_credit_dollars: float  # net_credit × contracts × SPX_MULTIPLIER
-    max_loss_dollars: float
-    filled_at: Optional[datetime]
-    is_paper: bool
-    rejection_reason: str = ""
-    raw_response: dict = field(default_factory=dict)
+    order_id:          str
+    status:            OrderStatus
+    spread_type:       str
+    contracts:         int
+    net_credit:        float          # SPX points per contract
+    net_credit_dollars: float         # net_credit × contracts × SPX_MULTIPLIER
+    max_loss_dollars:  float
+    filled_at:         Optional[datetime]
+    is_paper:          bool
+    rejection_reason:  str = ""
+    raw_response:      dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
-            "order_id": self.order_id,
-            "status": self.status.value,
-            "spread_type": self.spread_type,
-            "contracts": self.contracts,
-            "net_credit": round(self.net_credit, 2),
+            "order_id":           self.order_id,
+            "status":             self.status.value,
+            "spread_type":        self.spread_type,
+            "contracts":          self.contracts,
+            "net_credit":         round(self.net_credit, 2),
             "net_credit_dollars": round(self.net_credit_dollars, 2),
-            "max_loss_dollars": round(self.max_loss_dollars, 2),
-            "filled_at": self.filled_at.isoformat() if self.filled_at else None,
-            "is_paper": self.is_paper,
-            "rejection_reason": self.rejection_reason,
+            "max_loss_dollars":   round(self.max_loss_dollars, 2),
+            "filled_at":          self.filled_at.isoformat() if self.filled_at else None,
+            "is_paper":           self.is_paper,
+            "rejection_reason":   self.rejection_reason,
         }
 
 
 class OrderManager:
     """
-    Async order manager for SPX/SPXW 0DTE spreads.
+    Order manager for SPX/SPXW 0DTE spreads.
 
-    Paper mode (config.IS_PAPER_MODE == True):
-      - Logs the intended order
-      - Returns a synthetic PAPER_FILL at the mid-price
-      - Does NOT call the Webull API
-
-    Live mode:
-      - Posts a multi-leg combo order to Webull HTTP API
-      - Returns the actual fill result
+    All entry methods are async. Underlying SDK calls are synchronous and run
+    in a thread executor so they don't block the event loop.
     """
 
-    def __init__(self) -> None:
-        self._is_paper = config.IS_PAPER_MODE
-        self._session  = None
+    def __init__(self, api_client=None) -> None:
+        self._api_client  = api_client or config.build_api_client()
+        self._is_paper    = config.IS_PAPER_MODE
+        self._trade_client = None  # lazy-init
 
-    async def _get_session(self):
-        import aiohttp
-        if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
-        return self._session
-
-    async def close(self) -> None:
-        if self._session and not self._session.closed:
-            await self._session.close()
+    def _get_trade_client(self):
+        if self._trade_client is None:
+            from webull.trade.trade_client import TradeClient
+            self._trade_client = TradeClient(self._api_client)
+        return self._trade_client
 
     # ── Entry orders ──────────────────────────────────────────────────────────
 
@@ -136,7 +138,7 @@ class OrderManager:
     ) -> OrderResult:
         """
         Enter a vertical spread (bull_put or bear_call).
-        The spread is always sold-to-open (we're premium sellers).
+        The spread is always sold-to-open — we're premium sellers.
         """
         if not quote.is_valid:
             return self._rejected(
@@ -144,21 +146,22 @@ class OrderManager:
                 f"invalid_quote: {quote.invalid_reason}",
             )
 
-        opt_type = "P" if "put" in quote.spread_type else "C"
-        expiry   = self._today_expiry()
+        side = "PUT" if "put" in quote.spread_type else "CALL"
+        expiry = self._today_expiry()
 
         legs = [
-            OrderLeg("SELL", "SPXW", expiry, quote.short_leg.strike, opt_type),
-            OrderLeg("BUY",  "SPXW", expiry, quote.long_leg.strike,  opt_type),
+            OrderLeg("SELL", side, quote.short_leg.strike, expiry),
+            OrderLeg("BUY",  side, quote.long_leg.strike,  expiry),
         ]
 
         if self._is_paper:
             return self._paper_fill(
                 quote.spread_type, size.contracts,
-                quote.net_credit, size.max_loss_per_contract * size.contracts,
+                quote.net_credit,
+                size.max_loss_per_contract * size.contracts,
             )
 
-        return await self._submit_combo_order(
+        return await self._submit_order(
             spread_type=quote.spread_type,
             legs=legs,
             net_credit=quote.net_credit,
@@ -171,10 +174,7 @@ class OrderManager:
         quote: IronCondorQuote,
         size: TradeSize,
     ) -> OrderResult:
-        """
-        Enter an iron condor.
-        Sends as a single 4-leg combo order to Webull.
-        """
+        """Enter an iron condor as a single 4-leg order."""
         if not quote.is_valid:
             return self._rejected(
                 "iron_condor", size.contracts, quote.net_credit,
@@ -183,19 +183,20 @@ class OrderManager:
 
         expiry = self._today_expiry()
         legs = [
-            OrderLeg("SELL", "SPXW", expiry, quote.put_wing.short_leg.strike,  "P"),
-            OrderLeg("BUY",  "SPXW", expiry, quote.put_wing.long_leg.strike,   "P"),
-            OrderLeg("SELL", "SPXW", expiry, quote.call_wing.short_leg.strike, "C"),
-            OrderLeg("BUY",  "SPXW", expiry, quote.call_wing.long_leg.strike,  "C"),
+            OrderLeg("SELL", "PUT",  quote.put_wing.short_leg.strike,  expiry),
+            OrderLeg("BUY",  "PUT",  quote.put_wing.long_leg.strike,   expiry),
+            OrderLeg("SELL", "CALL", quote.call_wing.short_leg.strike, expiry),
+            OrderLeg("BUY",  "CALL", quote.call_wing.long_leg.strike,  expiry),
         ]
 
         if self._is_paper:
             return self._paper_fill(
                 "iron_condor", size.contracts,
-                quote.net_credit, size.max_loss_per_contract * size.contracts,
+                quote.net_credit,
+                size.max_loss_per_contract * size.contracts,
             )
 
-        return await self._submit_combo_order(
+        return await self._submit_order(
             spread_type="iron_condor",
             legs=legs,
             net_credit=quote.net_credit,
@@ -225,13 +226,12 @@ class OrderManager:
                 -close_price,   # negative = debit paid
                 0.0,
             )
-        # Live: would mirror the entry legs with reversed BUY/SELL
-        # Implemented when live mode is activated (Phase 3)
-        raise NotImplementedError("Live close not yet implemented — still in paper mode")
+        # Live: mirror entry legs with reversed BUY/SELL — implemented in Phase 3
+        raise NotImplementedError("Live close not yet implemented — system is in paper mode")
 
-    # ── Internal helpers ──────────────────────────────────────────────────────
+    # ── Internal: SDK order submission ────────────────────────────────────────
 
-    async def _submit_combo_order(
+    async def _submit_order(
         self,
         spread_type: str,
         legs: list[OrderLeg],
@@ -239,75 +239,74 @@ class OrderManager:
         contracts: int,
         max_loss_dollars: float,
     ) -> OrderResult:
-        """POST a multi-leg combo order to Webull."""
-        import aiohttp
-
-        session = await self._get_session()
-        payload = {
-            "accountId": config.WEBULL_ACCOUNT_ID,
-            "orderType": "LMT",
-            "timeInForce": "DAY",
-            "comboType": "VERTICAL" if len(legs) == 2 else "CONDOR",
-            "lmtPrice": str(round(net_credit, 2)),
-            "qty": str(contracts),
-            "legs": [
-                {
-                    "action": leg.action,
-                    "symbol": leg.symbol,
-                    "expDate": leg.exp_date,
-                    "strike": str(int(leg.strike)),
-                    "right": leg.right,
-                    "ratio": leg.ratio,
-                }
-                for leg in legs
-            ],
-        }
-        headers = {
-            "App": "desktop",
-            "App-Group": "broker",
-            "Appid": config.WEBULL_APP_KEY,
-            "Did": config.WEBULL_ACCOUNT_ID,
-            "Access-Token": config.WEBULL_TRADE_TOKEN,
-            "Content-Type": "application/json",
-        }
-
-        url = f"{ORDER_BASE_URL}/order/place"
-        LOGGER.info("Submitting LIVE order: %s × %d @ %.2f credit", spread_type, contracts, net_credit)
-
+        """Submit multi-leg order via SDK (runs in thread executor)."""
+        loop = asyncio.get_event_loop()
         try:
-            async with session.post(
-                url, json=payload, headers=headers,
-                timeout=aiohttp.ClientTimeout(total=10),
-            ) as resp:
-                resp.raise_for_status()
-                data = await resp.json()
+            raw = await loop.run_in_executor(
+                None,
+                self._submit_order_sync,
+                spread_type, legs, net_credit, contracts,
+            )
         except Exception as exc:
             LOGGER.error("Order submission failed: %s", exc)
-            return self._rejected(spread_type, contracts, net_credit, f"http_error: {exc}")
+            return self._rejected(spread_type, contracts, net_credit, f"sdk_error: {exc}")
 
-        order_id = str(data.get("orderId") or data.get("data", {}).get("orderId", ""))
-        status_str = str(data.get("status") or data.get("data", {}).get("status", "PENDING")).upper()
-
+        order_id  = str(raw.get("orderId") or raw.get("order_id") or uuid.uuid4())
+        status_raw = str(raw.get("status") or "PENDING").upper()
         try:
-            status = OrderStatus[status_str]
+            status = OrderStatus[status_raw]
         except KeyError:
             status = OrderStatus.PENDING
 
         return OrderResult(
-            order_id=order_id or str(uuid.uuid4()),
+            order_id=order_id,
             status=status,
             spread_type=spread_type,
             contracts=contracts,
             net_credit=net_credit,
-            net_credit_dollars=net_credit * contracts * SPX_MULTIPLIER,
+            net_credit_dollars=round(net_credit * contracts * SPX_MULTIPLIER, 2),
             max_loss_dollars=max_loss_dollars,
             filled_at=datetime.now(EASTERN) if status == OrderStatus.FILLED else None,
             is_paper=False,
-            raw_response=data,
+            raw_response=raw,
         )
 
+    def _submit_order_sync(
+        self,
+        spread_type: str,
+        legs: list[OrderLeg],
+        net_credit: float,
+        contracts: int,
+    ) -> dict:
+        """Synchronous SDK call — executed in thread executor."""
+        LOGGER.info(
+            "Submitting LIVE order: %s × %d @ %.2f credit",
+            spread_type, contracts, net_credit,
+        )
+        trade_client = self._get_trade_client()
+        new_orders = [leg.to_sdk_dict() for leg in legs]
+
+        resp = trade_client.order_v2.place_option(
+            account_id=config.WEBULL_ACCOUNT_ID,
+            new_orders=new_orders,
+        )
+
+        # SDK returns response object; extract body
+        if hasattr(resp, "body") and resp.body:
+            body = resp.body
+            return body.__dict__ if hasattr(body, "__dict__") else body
+        if isinstance(resp, dict):
+            return resp.get("data") or resp
+        return {}
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
+
     def _paper_fill(
-        self, spread_type: str, contracts: int, net_credit: float, max_loss_dollars: float,
+        self,
+        spread_type: str,
+        contracts: int,
+        net_credit: float,
+        max_loss_dollars: float,
     ) -> OrderResult:
         order_id = f"PAPER-{int(time.time())}-{uuid.uuid4().hex[:6].upper()}"
         LOGGER.info(
@@ -328,7 +327,11 @@ class OrderManager:
         )
 
     def _rejected(
-        self, spread_type: str, contracts: int, net_credit: float, reason: str,
+        self,
+        spread_type: str,
+        contracts: int,
+        net_credit: float,
+        reason: str,
     ) -> OrderResult:
         LOGGER.error("Order rejected: %s — %s", spread_type, reason)
         return OrderResult(
@@ -346,4 +349,5 @@ class OrderManager:
 
     @staticmethod
     def _today_expiry() -> str:
-        return datetime.now(EASTERN).strftime("%Y%m%d")
+        """Return today's date in YYYY-MM-DD (SDK expects this format)."""
+        return datetime.now(EASTERN).strftime("%Y-%m-%d")

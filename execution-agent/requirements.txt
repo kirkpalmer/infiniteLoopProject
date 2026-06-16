@@ -1,25 +1,19 @@
 # InfiniteLoop Execution Agent — Python dependencies
-# Pin major versions; update after testing
 
-# Async runtime
-asyncio-mqtt==0.16.2       # MQTT client for Webull feed (aiomqtt)
-aiomqtt==1.2.1             # alias package (depends on asyncio-mqtt)
-aiohttp==3.9.5             # HTTP client for Webull REST API
+# Webull OpenAPI Python SDK (handles HTTP, MQTT, gRPC, auth — replaces aiomqtt + aiohttp)
+webull-openapi-python-sdk>=1.0.0
 
 # Database
-psycopg2-binary==2.9.9     # PostgreSQL (sync, for trade_logger)
-asyncpg==0.29.0            # PostgreSQL (async, if needed later)
+psycopg2-binary==2.9.9     # PostgreSQL (sync, for trade_logger and startup)
+asyncpg==0.29.0            # PostgreSQL (async, if needed in future layers)
 
 # Environment
 python-dotenv==1.0.1
 
-# Data (prior-day context at startup)
+# Data (prior-day context fetched at startup via yfinance)
 yfinance==0.2.40
 pandas==2.2.2
 numpy==1.26.4
 
 # Timezone
 pytz==2024.1
-
-# HTTP (used by aiohttp internally, ensure compatibility)
-charset-normalizer==3.3.2

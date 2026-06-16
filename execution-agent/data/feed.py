@@ -1,75 +1,108 @@
 """
-data/feed.py — Webull MQTT subscriber for live ES futures tick data.
+data/feed.py — Live ES futures feed using the Webull Python SDK.
 
-Connects to the Webull OpenAPI MQTT broker, subscribes to the ES continuous
-contract tick feed, and forwards each trade tick to a BarNormalizer instance.
+Replaces the previous custom aiomqtt implementation. The SDK's DataStreamingClient
+wraps paho-mqtt and handles all authentication (token exchange, signing, reconnect)
+automatically — no manual MQTT password building or broker-endpoint calls needed.
 
-Webull MQTT details (from Webull OpenAPI docs):
-  - Broker: connect via Webull's API to get the MQTT endpoint + credentials
-  - Topic:  market data topics for futures quotes
-  - Auth:   token-based, refreshed from the Webull HTTP API
+Two modes:
+  1. Streaming (preferred): DataStreamingClient subscribes to the ES futures
+     snapshot topic via MQTT. Each incoming snapshot is forwarded to BarNormalizer.
+  2. Polling fallback: If the MQTT subscription fails, DataClient polls
+     get_futures_snapshot() every POLL_INTERVAL_SECONDS. Less efficient but
+     sufficient for a classifier that fires once per day.
 
-The feed runs in an asyncio task. On disconnect it backs off and reconnects
-automatically. The watchdog monitors feed.last_tick_at to detect stalls.
+The streaming client runs in a background thread (paho-mqtt is synchronous/threaded,
+not async). Thread-safe: BarNormalizer is append-only with a deque(maxlen).
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
+import threading
 import time
+import uuid
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Callable, Optional
+
+import pytz
 
 import config
 from data.normalizer import Bar, BarNormalizer
 
 LOGGER = logging.getLogger("infiniteloop.data.feed")
 
-# Reconnect back-off: start at 2 s, cap at 60 s
-_RECONNECT_INITIAL = 2.0
-_RECONNECT_MAX     = 60.0
+EASTERN = pytz.timezone("US/Eastern")
 
-# ES continuous contract symbol used in Webull's market data API
-ES_SYMBOL = "ESc1"   # continuous front-month; confirm exact symbol with Webull docs
+# ES continuous front-month contract symbol for Webull futures feed
+ES_SYMBOL   = "ESc1"
+ES_CATEGORY = "US_FUTURES"
+
+# SDK streaming sub-type for real-time snapshot updates
+STREAM_SUB_TYPE = "snapshot"
+
+# Fallback polling interval (seconds) when streaming is unavailable
+POLL_INTERVAL_SECONDS = 30
+
+# Feed considered stalled if no update in this many seconds
+STALL_THRESHOLD_SECONDS = 120
 
 
 class WebullFeed:
     """
-    Async MQTT feed that streams ES futures ticks from Webull.
+    Live ES futures price feed using the Webull SDK.
 
-    Usage:
-        feed = WebullFeed(on_bar=my_callback)
-        await feed.start()          # connect and subscribe
+    Usage (from an async context):
+        feed = WebullFeed(api_client=config.build_api_client(), on_bar=my_callback)
+        await feed.start()
         ...
-        await feed.stop()           # clean shutdown
+        bars = feed.rth_bars_today()
+        await feed.stop()
     """
 
-    def __init__(self, on_bar=None) -> None:
-        self._normalizer = BarNormalizer(on_bar=on_bar)
-        self._task: Optional[asyncio.Task] = None
-        self._running = False
-        self.last_tick_at: Optional[float] = None   # Unix timestamp of last tick received
-        self._reconnect_delay = _RECONNECT_INITIAL
+    def __init__(
+        self,
+        api_client=None,
+        on_bar: Optional[Callable[[Bar], None]] = None,
+    ) -> None:
+        self._api_client       = api_client or config.build_api_client()
+        self._normalizer       = BarNormalizer(on_bar=on_bar)
+        self._streaming_client = None
+        self._poll_thread: Optional[threading.Thread] = None
+        self._stop_event       = threading.Event()
+        self.last_tick_at: Optional[float] = None
+        self._mode = "stopped"  # streaming | polling | stopped
 
-    # ── Public interface ───────────────────────────────────────────────────────
+    # ── Public interface ──────────────────────────────────────────────────────
 
     async def start(self) -> None:
-        """Begin streaming. Returns immediately; feed runs in the background."""
-        self._running = True
-        self._task = asyncio.create_task(self._run_loop(), name="webull-feed")
-        LOGGER.info("WebullFeed started (symbol=%s)", ES_SYMBOL)
+        """Start the feed. Tries streaming first, falls back to polling."""
+        self._stop_event.clear()
+        if self._try_start_streaming():
+            self._mode = "streaming"
+            LOGGER.info("WebullFeed started in STREAMING mode (MQTT via SDK)")
+        else:
+            self._start_polling()
+            self._mode = "polling"
+            LOGGER.warning(
+                "WebullFeed streaming unavailable — using POLLING mode "
+                "(snapshot every %ds)", POLL_INTERVAL_SECONDS,
+            )
 
     async def stop(self) -> None:
         """Graceful shutdown."""
-        self._running = False
-        if self._task and not self._task.done():
-            self._task.cancel()
+        self._stop_event.set()
+        if self._streaming_client:
             try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
+                self._streaming_client.unsubscribe(unsubscribe_all=True)
+                self._streaming_client.disconnect()
+            except Exception as exc:
+                LOGGER.warning("Streaming client disconnect error: %s", exc)
+            self._streaming_client = None
+        if self._poll_thread and self._poll_thread.is_alive():
+            self._poll_thread.join(timeout=5)
+        self._mode = "stopped"
         LOGGER.info("WebullFeed stopped")
 
     @property
@@ -82,121 +115,113 @@ class WebullFeed:
     def latest_bars(self, n: int = 60) -> list[Bar]:
         return self._normalizer.latest_bars(n)
 
-    # ── Internal MQTT loop ─────────────────────────────────────────────────────
+    def is_stalled(self) -> bool:
+        """True if no tick has arrived in STALL_THRESHOLD_SECONDS."""
+        if self.last_tick_at is None:
+            return False   # never received anything yet — don't alarm before market open
+        return (time.time() - self.last_tick_at) > STALL_THRESHOLD_SECONDS
 
-    async def _run_loop(self) -> None:
-        """Connect → subscribe → receive loop with automatic reconnect."""
-        while self._running:
-            try:
-                await self._connect_and_stream()
-                self._reconnect_delay = _RECONNECT_INITIAL   # reset on clean exit
-            except asyncio.CancelledError:
-                break
-            except Exception as exc:
-                LOGGER.error(
-                    "Feed connection error: %s — reconnecting in %.0fs",
-                    exc, self._reconnect_delay,
+    # ── Streaming (MQTT via SDK DataStreamingClient) ───────────────────────────
+
+    def _try_start_streaming(self) -> bool:
+        """Attempt to start the SDK DataStreamingClient. Returns True on success."""
+        try:
+            from webull.data.data_streaming_client import DataStreamingClient
+
+            session_id = str(uuid.uuid4())
+            client = DataStreamingClient(
+                app_key=config.WEBULL_APP_KEY,
+                app_secret=config.WEBULL_APP_SECRET,
+                region_id=config.WEBULL_REGION_ID,
+                session_id=session_id,
+                http_host=config.WEBULL_STREAM_HOST,
+                tls_enable=True,
+            )
+
+            def on_connect(streaming_client, userdata, session_id):
+                LOGGER.info("MQTT connected — subscribing to %s", ES_SYMBOL)
+                streaming_client.subscribe(
+                    symbols=ES_SYMBOL,
+                    category=ES_CATEGORY,
+                    sub_types=[STREAM_SUB_TYPE],
                 )
-            if not self._running:
-                break
-            await asyncio.sleep(self._reconnect_delay)
-            self._reconnect_delay = min(self._reconnect_delay * 2, _RECONNECT_MAX)
 
-    async def _connect_and_stream(self) -> None:
-        """
-        Establish the Webull MQTT connection and stream ticks until disconnect.
+            def on_subscribe_success(streaming_client, result, session_id):
+                LOGGER.info("Subscribed to %s snapshot feed", ES_SYMBOL)
 
-        Webull OpenAPI MQTT flow:
-          1. GET /quote/broker/ip  → {host, port, path}  (broker endpoint)
-          2. Subscribe with app_key + token for auth
-          3. Publish subscription message for ES ticks
-          4. Receive Quote messages → parse → forward to normalizer
-
-        We use the `asyncio-mqtt` (aiomqtt) library which wraps paho-mqtt
-        with async support.
-        """
-        import aiomqtt
-
-        broker_info = await self._get_broker_info()
-        host = broker_info["host"]
-        port = int(broker_info.get("port", 1883))
-
-        username = config.WEBULL_APP_KEY
-        password = self._build_mqtt_password()
-
-        LOGGER.info("Connecting to Webull MQTT broker %s:%d", host, port)
-
-        async with aiomqtt.Client(
-            hostname=host,
-            port=port,
-            username=username,
-            password=password,
-            keepalive=30,
-        ) as client:
-            # Subscribe to the ES futures quote topic
-            topic = f"quotes/futures/{ES_SYMBOL}"
-            await client.subscribe(topic)
-            LOGGER.info("Subscribed to MQTT topic: %s", topic)
-            self._reconnect_delay = _RECONNECT_INITIAL  # successful connect
-
-            async for message in client.messages:
-                if not self._running:
-                    break
+            def on_message(streaming_client, topic, result):
                 try:
-                    self._handle_message(message.payload)
+                    self._handle_snapshot(result)
                 except Exception as exc:
-                    LOGGER.warning("Tick parse error: %s", exc)
+                    LOGGER.warning("Snapshot handling error: %s", exc)
 
-    async def _get_broker_info(self) -> dict:
+            client.on_connect_success  = on_connect
+            client.on_subscribe_success = on_subscribe_success
+            client.on_message = on_message
+
+            # connect() is non-blocking — paho starts its own background thread
+            client.connect()
+            self._streaming_client = client
+            return True
+
+        except Exception as exc:
+            LOGGER.warning("Could not start streaming client: %s", exc)
+            return False
+
+    def _handle_snapshot(self, result) -> None:
         """
-        Call the Webull HTTP API to get the current MQTT broker endpoint.
-        Webull rotates broker IPs so this must be called fresh each connect.
+        Convert an SDK SnapshotResult (or raw dict from HTTP poll) to a tick
+        and forward to BarNormalizer.
         """
-        import aiohttp
-
-        url = "https://quoteapi.webull.com/api/quote/broker/ip"
-        headers = {
-            "App": "desktop",
-            "App-Group": "broker",
-            "Appid": config.WEBULL_APP_KEY,
-            "Did": config.WEBULL_ACCOUNT_ID,
-        }
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                resp.raise_for_status()
-                data = await resp.json()
-                LOGGER.debug("Broker info: %s", data)
-                return data
-
-    def _build_mqtt_password(self) -> str:
-        """
-        Build the MQTT password token.
-        Webull uses: base64(app_key + ':' + trade_token) or similar.
-        Check the Webull OpenAPI auth docs for the exact format.
-        """
-        import base64
-        raw = f"{config.WEBULL_APP_KEY}:{config.WEBULL_TRADE_TOKEN}"
-        return base64.b64encode(raw.encode()).decode()
-
-    def _handle_message(self, payload: bytes) -> None:
-        """Parse a raw MQTT message and forward the tick to the normalizer."""
-        data = json.loads(payload)
-
-        # Webull quote message format (adapt to actual proto/JSON schema):
-        # { "type": "quote", "tickerId": ..., "tradeTime": <ms epoch>,
-        #   "close": "5750.25", "volume": "10" }
-        msg_type = data.get("type", "")
-        if msg_type not in ("quote", "trade", "tick"):
+        # SnapshotResult from MQTT streaming
+        if hasattr(result, "price") and result.price is not None:
+            price  = float(result.price)
+            volume = int(getattr(result, "volume", None) or 1)
+        # Plain dict from HTTP polling fallback
+        elif isinstance(result, dict):
+            price  = float(result.get("close") or result.get("price") or 0)
+            volume = int(result.get("volume") or 1)
+        else:
             return
 
-        price_raw = data.get("close") or data.get("price") or data.get("lastPrice")
-        if price_raw is None:
+        if price <= 0:
             return
 
-        price  = float(price_raw)
-        size   = int(data.get("volume", 0) or data.get("size", 0) or 1)
-        ts_ms  = data.get("tradeTime") or data.get("timestamp") or (time.time() * 1000)
-        ts     = datetime.fromtimestamp(float(ts_ms) / 1000.0, tz=timezone.utc)
-
+        ts = datetime.now(timezone.utc)
         self.last_tick_at = time.time()
-        self._normalizer.on_tick(price=price, size=size, ts=ts)
+        self._normalizer.on_tick(price=price, size=volume, ts=ts)
+
+    # ── Polling fallback ───────────────────────────────────────────────────────
+
+    def _start_polling(self) -> None:
+        self._poll_thread = threading.Thread(
+            target=self._poll_loop, name="webull-poll", daemon=True
+        )
+        self._poll_thread.start()
+
+    def _poll_loop(self) -> None:
+        """Background thread: poll get_futures_snapshot() every N seconds."""
+        from webull.data.data_client import DataClient
+        from webull.api.enum import Category
+
+        data_client = DataClient(self._api_client)
+
+        while not self._stop_event.is_set():
+            try:
+                resp = data_client.futures_market_data.get_futures_snapshot(
+                    symbols=[ES_SYMBOL],
+                    category=Category.US_FUTURES,
+                )
+                # SDK returns the API response object; parse the body
+                if hasattr(resp, "body") and resp.body:
+                    items = resp.body if isinstance(resp.body, list) else [resp.body]
+                    for item in items:
+                        self._handle_snapshot(
+                            item.__dict__ if hasattr(item, "__dict__") else item
+                        )
+                else:
+                    LOGGER.warning("Futures snapshot poll returned empty body")
+            except Exception as exc:
+                LOGGER.error("Futures snapshot poll error: %s", exc)
+
+            self._stop_event.wait(POLL_INTERVAL_SECONDS)
