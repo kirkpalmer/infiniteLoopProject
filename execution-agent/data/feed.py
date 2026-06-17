@@ -1,19 +1,22 @@
 """
-data/feed.py — Live ES futures feed using the Webull Python SDK.
+data/feed.py — Live SPY price feed using the Webull Python SDK.
 
-Replaces the previous custom aiomqtt implementation. The SDK's DataStreamingClient
-wraps paho-mqtt and handles all authentication (token exchange, signing, reconnect)
-automatically — no manual MQTT password building or broker-endpoint calls needed.
+Uses SPY (SPDR S&P 500 ETF) as a proxy for SPX intraday direction. SPY tracks
+SPX tick-for-tick during RTH and is included in standard US_STOCK data subscriptions,
+unlike US_FUTURES which requires a separate paid subscription.
 
 Two modes:
-  1. Streaming (preferred): DataStreamingClient subscribes to the ES futures
-     snapshot topic via MQTT. Each incoming snapshot is forwarded to BarNormalizer.
-  2. Polling fallback: If the MQTT subscription fails, DataClient polls
-     get_futures_snapshot() every POLL_INTERVAL_SECONDS. Less efficient but
-     sufficient for a classifier that fires once per day.
+  1. Streaming (preferred): DataStreamingClient subscribes to the SPY snapshot
+     topic via MQTT. Each incoming snapshot is forwarded to BarNormalizer.
+  2. Polling fallback: If MQTT subscription fails, DataClient polls
+     get_snapshot() every POLL_INTERVAL_SECONDS. Sufficient for a classifier
+     that fires once per day.
 
 The streaming client runs in a background thread (paho-mqtt is synchronous/threaded,
 not async). Thread-safe: BarNormalizer is append-only with a deque(maxlen).
+
+SPY vs SPX: All Oracle features are percentage-based (gap %, ORB %, VWAP slope).
+A 0.5% move in SPY = 0.5% move in SPX. The absolute price level doesn't matter.
 """
 
 from __future__ import annotations
@@ -36,8 +39,8 @@ LOGGER = logging.getLogger("infiniteloop.data.feed")
 EASTERN = pytz.timezone("US/Eastern")
 
 # ES continuous front-month contract symbol for Webull futures feed
-ES_SYMBOL   = "ESmain"   # Webull continuous front-month notation (not Reuters ESc1)
-ES_CATEGORY = "US_FUTURES"
+ES_SYMBOL   = "SPY"       # SPY as SPX proxy; US_STOCK included in basic subscription
+ES_CATEGORY = "US_STOCK"  # US_FUTURES requires a separate paid subscription
 
 # SDK streaming sub-type for real-time snapshot updates
 STREAM_SUB_TYPE = "snapshot"
@@ -200,7 +203,7 @@ class WebullFeed:
         self._poll_thread.start()
 
     def _poll_loop(self) -> None:
-        """Background thread: poll get_futures_snapshot() every N seconds."""
+        """Background thread: poll get_snapshot() for SPY every N seconds."""
         from webull.data.data_client import DataClient
         from webull.data.common.category import Category
 
@@ -208,11 +211,10 @@ class WebullFeed:
 
         while not self._stop_event.is_set():
             try:
-                resp = data_client.futures_market_data.get_futures_snapshot(
-                    symbols=[ES_SYMBOL],
-                    category=Category.US_FUTURES,
+                resp = data_client.market_data.get_snapshot(
+                    symbols=ES_SYMBOL,
+                    category=Category.US_STOCK,
                 )
-                # SDK returns the API response object; parse the body
                 if hasattr(resp, "body") and resp.body:
                     items = resp.body if isinstance(resp.body, list) else [resp.body]
                     for item in items:
@@ -220,8 +222,8 @@ class WebullFeed:
                             item.__dict__ if hasattr(item, "__dict__") else item
                         )
                 else:
-                    LOGGER.warning("Futures snapshot poll returned empty body")
+                    LOGGER.warning("SPY snapshot poll returned empty body")
             except Exception as exc:
-                LOGGER.error("Futures snapshot poll error: %s", exc)
+                LOGGER.error("SPY snapshot poll error: %s", exc)
 
             self._stop_event.wait(POLL_INTERVAL_SECONDS)

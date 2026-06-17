@@ -224,46 +224,36 @@ def _fetch_prior_day_context(api_client=None) -> PriorDayContext:
             date=datetime.now(EASTERN).strftime("%Y-%m-%d"),
         )
 
-    LOGGER.info("Fetching prior-day context from Webull DataClient...")
+    LOGGER.info("Fetching prior-day SPY context from Webull DataClient...")
 
-    # ── ES daily bars (prior_close, prior_prior_close) ─────────────────────
-    es_closes: list[float] = []
+    # ── SPY daily bars (prior_close, prior_prior_close) ────────────────────
+    # SPY is used as an SPX proxy. All Oracle features are pct-based so the
+    # absolute price level (SPY ~550 vs SPX ~5500) doesn't matter.
+    spy_closes: list[float] = []
     try:
-        resp = client.futures_market_data.get_futures_history_bars(
-            symbols=["ESmain"],
-            category=Category.US_FUTURES,
+        resp = client.market_data.get_history_bar(
+            symbol="SPY",
+            category=Category.US_STOCK,
             timespan="d1",
             count="5",
         )
-        es_closes = _parse_bar_closes(resp)
-        if es_closes:
-            LOGGER.info("ES daily bars: %d bars, last close=%.2f", len(es_closes), es_closes[-1])
+        spy_closes = _parse_bar_closes(resp)
+        if spy_closes:
+            LOGGER.info("SPY daily bars: %d bars, last close=%.2f", len(spy_closes), spy_closes[-1])
         else:
-            LOGGER.warning("Webull ES history bars returned no data")
+            LOGGER.warning("Webull SPY history bars returned no data")
     except Exception as exc:
-        LOGGER.warning("ES history bars fetch failed: %s", exc)
+        LOGGER.warning("SPY history bars fetch failed: %s", exc)
 
-    # ── VX snapshot for VIX proxy ──────────────────────────────────────────
+    # ── VIX: default 20.0 (no free VIX feed; tunable threshold in Oracle) ─
+    # US_FUTURES subscription is required for VX futures data. For paper
+    # trading validation we use a fixed neutral default. The vol filter
+    # thresholds in Oracle params will be calibrated against this.
     current_vix: float = _FALLBACK_PRIOR_CTX["current_vix"]
-    try:
-        resp_vx = client.futures_market_data.get_futures_snapshot(
-            symbols=["VXmain"],
-            category=Category.US_FUTURES,
-        )
-        body = getattr(resp_vx, "body", None)
-        items = body if isinstance(body, list) else ([body] if body else [])
-        if items:
-            item = items[0]
-            vx_close = float(getattr(item, "close", None) or getattr(item, "prev_close", None) or 0)
-            if vx_close > 0:
-                current_vix = vx_close
-                LOGGER.info("VX snapshot close=%.2f (used as VIX proxy)", current_vix)
-        if current_vix == _FALLBACK_PRIOR_CTX["current_vix"]:
-            LOGGER.warning("VX snapshot unusable — using default VIX=%.1f", current_vix)
-    except Exception as exc:
-        LOGGER.warning("VX snapshot fetch failed: %s — using default VIX=%.1f", exc, current_vix)
+    LOGGER.info("Using default VIX=%.1f (US_FUTURES subscription not active)", current_vix)
 
     # ── Build context ──────────────────────────────────────────────────────
+    es_closes = spy_closes   # rename for shared build logic below
     if len(es_closes) >= 2:
         prior_close       = es_closes[-1]
         prior_prior_close = es_closes[-2]
@@ -271,7 +261,7 @@ def _fetch_prior_day_context(api_client=None) -> PriorDayContext:
         prior_close = prior_prior_close = es_closes[0]
     else:
         LOGGER.error(
-            "No ES history data from Webull — using defaults. "
+            "No SPY history data from Webull — using defaults. "
             "Oracle will classify SKIP until data is available."
         )
         prior_close = prior_prior_close = _FALLBACK_PRIOR_CTX["prior_close"]
@@ -284,7 +274,7 @@ def _fetch_prior_day_context(api_client=None) -> PriorDayContext:
         date=datetime.now(EASTERN).strftime("%Y-%m-%d"),
     )
     LOGGER.info(
-        "Prior-day context: es_close=%.2f es_prev=%.2f vix=%.1f",
+        "Prior-day context: spy_close=%.2f spy_prev=%.2f vix=%.1f",
         ctx.prior_close, ctx.prior_prior_close, ctx.current_vix,
     )
     return ctx
